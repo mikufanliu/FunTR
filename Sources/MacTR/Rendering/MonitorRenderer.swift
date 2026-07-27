@@ -614,17 +614,15 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         // behaviours (mostly relax, occasional interact/move, and a nap). Each
         // behaviour holds for `dwell` seconds, chosen by wall-clock so it's stateless.
         let now = Date().timeIntervalSince1970
-        let dwell = 6.0
-        let combat: [[CGImage]] = [SkadiAsset.skill2, SkadiAsset.battleIdle,
-                                   SkadiAsset.skill3, SkadiAsset.battleIdle]
+        let dwell = 7.0
+        let combat: [[CGImage]] = [SkadiAsset.skill2, SkadiAsset.skill3]
         let base: [[CGImage]] = [SkadiAsset.relax, SkadiAsset.relax, SkadiAsset.interact,
                                  SkadiAsset.move, SkadiAsset.relax, SkadiAsset.sleep]
         let clips = busy ? combat : base
-        // Keep the sprite fps BELOW the frame-loop rate (15fps busy / 12fps idle) so
-        // frames step evenly — a higher sprite fps than the render rate looks jittery.
-        let fps: Double = busy ? 10 : 8
+        // Clips were sampled at SkadiAsset.fps, so play back at that rate for real speed.
+        let fps = SkadiAsset.fps
         var frames = clips[Int(now / dwell) % clips.count]
-        if frames.isEmpty { frames = busy ? SkadiAsset.battleIdle : SkadiAsset.relax }
+        if frames.isEmpty { frames = busy ? SkadiAsset.skill2 : SkadiAsset.relax }
         guard !frames.isEmpty else { return }
         let img = frames[Int(now * fps) % frames.count]
 

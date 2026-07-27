@@ -14,7 +14,7 @@
 # Example:
 #   ./bake.sh model/skadi2/default_build build_char_1012_skadi2 Relax 24 200 240 /tmp/skadi_Relax.png
 set -e
-MODEL="$1"; SKEL="$2"; ANIM="${3:-Relax}"; FRAMES="${4:-24}"; W="${5:-200}"; H="${6:-240}"
+MODEL="$1"; SKEL="$2"; ANIM="${3:-Relax}"; FPS="${4:-10}"; W="${5:-200}"; H="${6:-240}"
 OUT="${7:-/tmp/${SKEL}_${ANIM}.png}"
 ARKDOCK_WEB="${ARKDOCK_WEB:-$HOME/work/arkdock/web}"
 CHROME="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
@@ -28,7 +28,7 @@ SRV=$!
 trap "kill $SRV 2>/dev/null; rm -f '$ARKDOCK_WEB/_bake.html'" EXIT
 sleep 0.6
 
-URL="http://127.0.0.1:${PORT}/_bake.html?model=${MODEL}&skel=${SKEL}&anim=${ANIM}&frames=${FRAMES}&w=${W}&h=${H}"
+URL="http://127.0.0.1:${PORT}/_bake.html?model=${MODEL}&skel=${SKEL}&anim=${ANIM}&fps=${FPS}&w=${W}&h=${H}"
 DOM=$("$CHROME" --headless=new --enable-unsafe-swiftshader --hide-scrollbars \
       --virtual-time-budget=20000 --dump-dom "$URL" 2>/dev/null)
 

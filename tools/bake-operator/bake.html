@@ -13,7 +13,11 @@ const q = new URLSearchParams(location.search);
 const model  = q.get('model');
 const skel   = q.get('skel');
 const anim   = q.get('anim')  || 'Relax';
-const frames = parseInt(q.get('frames') || '24');
+// Sample at a FIXED capture fps so frame count is proportional to the animation's
+// real duration — a long clip gets more frames instead of being compressed into a
+// fixed count (which plays back too fast). Play back at this same fps = real speed.
+const capFps = parseFloat(q.get('fps') || '10');
+const maxF   = parseInt(q.get('maxframes') || '60');
 const W      = parseInt(q.get('w') || '200');
 const H      = parseInt(q.get('h') || '240');
 
@@ -45,13 +49,15 @@ loader.load((_, res) => {
     app.stage.addChild(sp);
 
     const dur = meta.duration || 1;
-    const dt = dur / frames;
+    const n = Math.max(2, Math.min(maxF, Math.round(dur * capFps)));
+    const dt = dur / n;
     const sheet = document.createElement('canvas');
-    sheet.width = W * frames; sheet.height = H;
+    sheet.width = W * n; sheet.height = H;
     const sctx = sheet.getContext('2d');
 
+    // Advance one full loop, one frame per dt, compositing each into the strip.
     app.renderer.render(app.stage);
-    for (let i = 0; i < frames; i++) {
+    for (let i = 0; i < n; i++) {
       app.renderer.render(app.stage);
       sctx.drawImage(app.view, i * W, 0, W, H);
       sp.update(dt);
