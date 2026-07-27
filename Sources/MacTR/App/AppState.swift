@@ -227,12 +227,20 @@ final class DisplayEngine: @unchecked Sendable {
         var nextDeadline = DispatchTime.now()
 
         while running {
-            // Adaptive frame rate: the device sustains ~19fps, but the dashboard's
-            // data only changes every ~2s. Run fast (15fps) ONLY while a column is
-            // animating (agent working → breathing, or done → blinking); otherwise
-            // idle at the configured interval to save CPU/power on this always-on app.
-            let animating = (currentSet == .systemMonitor) && monitorRenderer.wantsHighFrameRate()
-            let frameInterval = animating ? (1.0 / 15.0) : interval
+            // Adaptive frame rate. The dashboard now always has a moving sprite (the
+            // operator chibi breathing/walking), so it's never truly static:
+            //   · 15fps while something is actively animating (agent working / hot CPU)
+            //   · 12fps otherwise on the monitor — keeps the idle chibi smooth
+            //   · the low `interval` only applies to non-animated sets
+            let high = (currentSet == .systemMonitor) && monitorRenderer.wantsHighFrameRate()
+            let frameInterval: Double
+            if high {
+                frameInterval = 1.0 / 15.0
+            } else if currentSet == .systemMonitor {
+                frameInterval = 1.0 / 12.0
+            } else {
+                frameInterval = interval
+            }
             nextDeadline = nextDeadline + .milliseconds(Int(frameInterval * 1000))
 
             // autoreleasepool forces CG raster data / CGImage release each frame
