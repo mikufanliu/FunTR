@@ -620,7 +620,9 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let base: [[CGImage]] = [SkadiAsset.relax, SkadiAsset.relax, SkadiAsset.interact,
                                  SkadiAsset.move, SkadiAsset.relax, SkadiAsset.sleep]
         let clips = busy ? combat : base
-        let fps: Double = busy ? 16 : 10
+        // Keep the sprite fps BELOW the frame-loop rate (15fps busy / 12fps idle) so
+        // frames step evenly — a higher sprite fps than the render rate looks jittery.
+        let fps: Double = busy ? 10 : 8
         var frames = clips[Int(now / dwell) % clips.count]
         if frames.isEmpty { frames = busy ? SkadiAsset.battleIdle : SkadiAsset.relax }
         guard !frames.isEmpty else { return }
