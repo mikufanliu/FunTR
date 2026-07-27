@@ -1,0 +1,64 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<script src="lib/pixi.min.js"></script>
+<script src="lib/pixi-spine.umd.js"></script>
+</head><body style="margin:0;background:transparent">
+<pre id="out">loading</pre>
+<script>
+// Renders one Spine animation into a horizontal sprite-sheet strip and emits it as
+// a PNG data URL in #out. Served from an arkdock `web/` dir so lib/ + model/ resolve.
+// Params: model, skel, anim, frames, w, h.
+const q = new URLSearchParams(location.search);
+const model  = q.get('model');
+const skel   = q.get('skel');
+const anim   = q.get('anim')  || 'Relax';
+const frames = parseInt(q.get('frames') || '24');
+const W      = parseInt(q.get('w') || '200');
+const H      = parseInt(q.get('h') || '240');
+
+function out(s){ document.getElementById('out').textContent = s; }
+
+const app = new PIXI.Application({ width: W, height: H, backgroundAlpha: 0, antialias: true });
+const loader = new PIXI.Loader();
+loader.add('m', model + '/' + skel + '.skel', {
+  metadata: { spineAtlasFile: model + '/' + skel + '.atlas' },
+  xhrType: PIXI.LoaderResource.XHR_RESPONSE_TYPE.BUFFER
+});
+loader.onError.add(e => out('ERR:loader:' + e.message));
+loader.load((_, res) => {
+  try {
+    const r = res['m'];
+    if (!r || !r.spineData) { out('ERR:no spineData'); return; }
+    const sp = new PIXI.spine.Spine(r.spineData);
+    const names = r.spineData.animations.map(a => a.name);
+    const meta = r.spineData.animations.find(a => a.name === anim);
+    if (!meta) { out('NOANIM:' + names.join(',')); return; }
+
+    sp.state.setAnimation(0, anim, true);
+    sp.update(0);
+    const b = sp.getLocalBounds();
+    const scale = Math.min(W / b.width, H / b.height) * 0.92;
+    sp.scale.set(scale);
+    sp.x = W / 2 - (b.x + b.width / 2) * scale;
+    sp.y = H - (b.y + b.height) * scale - H * 0.03;
+    app.stage.addChild(sp);
+
+    const dur = meta.duration || 1;
+    const dt = dur / frames;
+    const sheet = document.createElement('canvas');
+    sheet.width = W * frames; sheet.height = H;
+    const sctx = sheet.getContext('2d');
+
+    app.renderer.render(app.stage);
+    for (let i = 0; i < frames; i++) {
+      app.renderer.render(app.stage);
+      sctx.drawImage(app.view, i * W, 0, W, H);
+      sp.update(dt);
+    }
+    out('DATA:' + sheet.toDataURL('image/png'));
+  } catch (e) {
+    out('ERR:' + (e && e.message ? e.message : e));
+  }
+});
+</script></body></html>

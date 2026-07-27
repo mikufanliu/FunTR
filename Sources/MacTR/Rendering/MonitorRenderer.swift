@@ -203,7 +203,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         else { return nil }
         ctx.translateBy(x: 0, y: CGFloat(h)); ctx.scaleBy(x: 1, y: -1)
         Draw.gradientBackground(ctx)
-        renderCPU(ctx, cpu: cpu, temp: temp, agentsBusy: true)
+        renderOperator(ctx, agents: agents)
         renderAgents(ctx, agents: agents)
         renderMemory(ctx, mem: mem, sys: sys, agentsBusy: true)
         return ctx.makeImage()
@@ -260,7 +260,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
 
         // Panels
         let agentsBusy = agents.anyLive
-        renderCPU(ctx, cpu: cpu, temp: temp, agentsBusy: agentsBusy)
+        renderOperator(ctx, agents: agents)
         renderAgents(ctx, agents: agents)
         renderMemory(ctx, mem: mem, sys: sys, agentsBusy: agentsBusy)
 
@@ -587,6 +587,55 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         ctx.restoreGState()
     }
 
+    // MARK: - Operator Panel (Skadi build-chibi, occupies the left / former CPU slot)
+
+    /// Animated Skadi chibi in the left panel. She walks (Move) while any agent is
+    /// working, and idles (Relax) otherwise. The old CPU panel (`renderCPU`) is kept
+    /// intact as a component so a future layout preset can swap it back in.
+    private func renderOperator(_ ctx: CGContext, agents: AgentsSnapshot) {
+        let x = Layout.panelX(0)
+        let pw = Layout.panelWidth
+        let py = Layout.panelY
+        let ph = Layout.panelHeight
+        let busy = agents.anyLive
+        let accent = Color.cyan
+
+        Draw.panel(ctx, x: x, y: py, w: pw, h: ph, accent: accent)
+        Draw.text(ctx, "SKADI", x: x + 20, y: py + 14,
+                  font: Fonts.system(24, weight: .bold), color: accent)
+        let status = busy ? "工作中" : "待机"
+        let sF = Fonts.system(16, weight: .medium)
+        let sW = (status as NSString).size(withAttributes: [.font: sF]).width
+        Draw.text(ctx, status, x: Int(CGFloat(x + pw - 20) - sW), y: py + 20,
+                  font: sF, color: busy ? Color.green : Color.textL)
+
+        let frames = busy ? SkadiAsset.moveFrames : SkadiAsset.relaxFrames
+        guard !frames.isEmpty else { return }
+        // Wall-clock frame pick; idle plays slower (gentle breathing) than working.
+        let fps: Double = busy ? 14 : 8
+        let idx = Int(Date().timeIntervalSince1970 * fps) % frames.count
+        let img = frames[max(0, idx)]
+
+        // Fit into the panel body, feet near the bottom.
+        let bodyTop = py + 48
+        let bodyH = ph - 48 - 12
+        let aspect = CGFloat(img.width) / CGFloat(img.height)
+        var dh = CGFloat(bodyH)
+        var dw = dh * aspect
+        let maxW = CGFloat(pw - 28)
+        if dw > maxW { dw = maxW; dh = dw / aspect }
+        let dx = CGFloat(x) + (CGFloat(pw) - dw) / 2
+        let dy = CGFloat(bodyTop) + (CGFloat(bodyH) - dh)
+        drawImageUpright(ctx, img, in: CGRect(x: dx, y: dy, width: dw, height: dh))
+    }
+
+    /// A session is "urgent" (pinned to the top, flashing red) only when it finished
+    /// recently — a turn that ended long ago is just idle, not something you must act
+    /// on now, so it must not hog the front of the list forever.
+    private func isUrgent(_ e: AgentEntry) -> Bool {
+        e.waiting && e.secondsSinceActive < 180
+    }
+
     // MARK: - AI Agents Panel (triple width)
 
     private func renderAgents(_ ctx: CGContext, agents: AgentsSnapshot) {
@@ -595,12 +644,13 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let py = Layout.panelY
         let ph = Layout.panelHeight
 
-        // Whole-panel accent turns red while any agent is waiting on you.
-        let waiting = agents.anyWaiting
+        // Whole-panel accent turns red only while an agent RECENTLY finished and
+        // wants you now — not for every long-idle session sitting in a waiting state.
+        let waiting = agents.entries.contains(where: isUrgent)
         Draw.panel(ctx, x: x, y: py, w: pw, h: ph, accent: waiting ? Color.red : Color.purple)
 
-        // Priority sort: waiting > working > idle, ties broken by recency.
-        func rank(_ e: AgentEntry) -> Int { e.waiting ? 0 : (e.isWorking ? 1 : 2) }
+        // Priority sort: urgent (freshly waiting) > working > idle, ties by recency.
+        func rank(_ e: AgentEntry) -> Int { isUrgent(e) ? 0 : (e.isWorking ? 1 : 2) }
         let sorted = agents.entries.sorted {
             rank($0) != rank($1) ? rank($0) < rank($1)
                 : $0.secondsSinceActive < $1.secondsSinceActive
@@ -649,7 +699,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     }
 
     private func statusColor(_ e: AgentEntry) -> CGColor {
-        if e.waiting { return Color.red }
+        if isUrgent(e) { return Color.red }
         if e.isWorking { return Color.green }
         return Color.textL
     }
@@ -722,7 +772,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
 
             // Second line: status text
             let (statusText, statusCol): (String, CGColor)
-            if e.waiting {
+            if isUrgent(e) {
                 (statusText, statusCol) = ("等你输入", Color.red)
             } else if e.isWorking {
                 (statusText, statusCol) = (e.stepText ?? firstLine(e.message) ?? "运行中…", Color.green)
@@ -760,7 +810,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         y += 42
 
         // Waiting badge (blinking) — the reason it was auto-focused
-        if e.waiting {
+        if isUrgent(e) {
             let on = Int(Date().timeIntervalSince1970 * 2) % 2 == 0
             let c = Color.red.copy(alpha: on ? 1 : 0.4) ?? Color.red
             ctx.setFillColor(c)
