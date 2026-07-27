@@ -24,6 +24,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     private var _temp: TemperatureSnapshot?
     private var _agents: AgentsSnapshot?
     private var _sys: SystemSnapshot?
+    private var _net: NetworkSnapshot?
 
     // Reusable CGContext — avoids allocating 3.6MB every 0.5s (prevents CG raster data leak)
     private var reusableCtx: CGContext?
@@ -68,9 +69,10 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let temp = collector.collectTemperature()
         let agents = agentCollector.collect()
         let sys = collector.collectSystem()
+        let net = collector.collectNetwork()
         lock.lock()
         _cpu = cpu0; _mem = mem
-        _temp = temp; _agents = agents; _sys = sys
+        _temp = temp; _agents = agents; _sys = sys; _net = net
         lock.unlock()
 
         // Second pass: get real CPU deltas
@@ -107,8 +109,9 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             // Fast metrics every tick
             let cpu = collector.collectCPU()
             let mem = collector.collectMemory()
+            let net = collector.collectNetwork()
             lock.lock()
-            _cpu = cpu; _mem = mem
+            _cpu = cpu; _mem = mem; _net = net
             lock.unlock()
 
             // Slow metrics every 4th tick (~2s)
@@ -205,7 +208,8 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         Draw.gradientBackground(ctx)
         renderOperator(ctx, agents: agents)
         renderAgents(ctx, agents: agents)
-        renderMemory(ctx, mem: mem, sys: sys, agentsBusy: true)
+        renderInfoPanel(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys,
+                        net: NetworkSnapshot(rxBytesPerSec: 1_450_000, txBytesPerSec: 240_000))
         return ctx.makeImage()
     }
 
@@ -220,16 +224,18 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
 
         let cpu: CPUSnapshot, mem: MemorySnapshot, temp: TemperatureSnapshot
         let sys: SystemSnapshot?
+        let net: NetworkSnapshot?
         var agents: AgentsSnapshot
         if demoMode {
             (cpu, mem, temp, sys, agents) = demoData()
+            net = NetworkSnapshot(rxBytesPerSec: 1_450_000, txBytesPerSec: 240_000)
         } else {
             // Read cached metrics (never blocks — uses latest available values)
             lock.lock()
             guard let c = _cpu, let m = _mem, let tp = _temp, let a = _agents else {
                 lock.unlock(); return nil
             }
-            cpu = c; mem = m; temp = tp; agents = a; sys = _sys
+            cpu = c; mem = m; temp = tp; agents = a; sys = _sys; net = _net
             lock.unlock()
         }
 
@@ -259,10 +265,9 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         Draw.gradientBackground(ctx)
 
         // Panels
-        let agentsBusy = agents.anyLive
         renderOperator(ctx, agents: agents)
         renderAgents(ctx, agents: agents)
-        renderMemory(ctx, mem: mem, sys: sys, agentsBusy: agentsBusy)
+        renderInfoPanel(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys, net: net)
 
         let image = ctx.makeImage()
         ctx.restoreGState()
@@ -515,6 +520,100 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         Draw.centeredText(ctx, formatter.string(from: Date()),
                           cx: x + pw / 2, y: dividerY + 30,
                           font: Fonts.system(66, weight: .medium), color: Color.textW)
+    }
+
+    // MARK: - Info Panel (replaces Memory in the current layout; renderMemory kept as a component)
+
+    /// Right-panel replacement: big clock + Gregorian date/weekday + lunar date (all
+    /// local), live network up/down, and a compact system readout that re-homes the
+    /// CPU/temp metrics displaced when Skadi took the CPU slot. No Bongo Cat.
+    private func renderInfoPanel(_ ctx: CGContext, cpu: CPUSnapshot, mem: MemorySnapshot,
+                                 temp: TemperatureSnapshot, sys: SystemSnapshot?,
+                                 net: NetworkSnapshot?) {
+        let x = Layout.panelX(4)
+        let pw = Layout.panelWidth
+        let py = Layout.panelY
+        let ph = Layout.panelHeight
+        let accent = Color.cyan
+        Draw.panel(ctx, x: x, y: py, w: pw, h: ph, accent: accent)
+        Draw.text(ctx, "STATUS", x: x + 20, y: py + 14,
+                  font: Fonts.system(24, weight: .bold), color: accent)
+
+        let cx = x + pw / 2
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US")
+
+        // Big clock — the headline
+        df.dateFormat = "HH:mm:ss"
+        Draw.centeredText(ctx, df.string(from: Date()), cx: cx, y: py + 66,
+                          font: Fonts.system(72, weight: .medium), color: Color.textW)
+        // Gregorian date + weekday
+        df.dateFormat = "yyyy-MM-dd  EEEE"
+        Draw.centeredText(ctx, df.string(from: Date()), cx: cx, y: py + 152,
+                          font: Fonts.system(20, weight: .semibold), color: Color.textS)
+        // Lunar date (local, no network)
+        Draw.centeredText(ctx, lunarString(Date()), cx: cx, y: py + 182,
+                          font: Fonts.system(19), color: Color.orange)
+
+        let dy = py + 216
+        Draw.line(ctx, from: CGPoint(x: x + 16, y: dy),
+                  to: CGPoint(x: x + pw - 16, y: dy), color: Color.border)
+
+        // Network — down / up
+        Draw.text(ctx, "网络", x: x + 20, y: dy + 14, font: Fonts.system(18), color: Color.textL)
+        func netRow(_ arrow: String, _ bps: Double, _ color: CGColor, _ ry: Int) {
+            Draw.text(ctx, arrow, x: x + 22, y: ry, font: Fonts.system(22, weight: .bold), color: color)
+            Draw.text(ctx, rate(bps), x: x + 56, y: ry + 2,
+                      font: Fonts.system(22, weight: .medium), color: Color.textW)
+        }
+        netRow("↓", net?.rxBytesPerSec ?? 0, Color.green, dy + 46)
+        netRow("↑", net?.txBytesPerSec ?? 0, Color.cyan, dy + 78)
+
+        // System — CPU / mem / temp (reclaimed from the retired CPU panel)
+        let syy = dy + 120
+        Draw.text(ctx, "系统", x: x + 20, y: syy, font: Fonts.system(18), color: Color.textL)
+        let iw = pw - 40
+        func sysRow(_ label: String, _ value: String, _ color: CGColor, _ ry: Int) {
+            Draw.text(ctx, label, x: x + 20, y: ry, font: Fonts.system(17), color: Color.textL)
+            let vf = Fonts.system(17, weight: .medium)
+            let vw = (value as NSString).size(withAttributes: [.font: vf]).width
+            Draw.text(ctx, value, x: Int(CGFloat(x + 20 + iw) - vw), y: ry, font: vf, color: color)
+        }
+        sysRow("CPU", String(format: "%.0f%%", cpu.total), Color.textW, syy + 28)
+        sysRow("内存", String(format: "%.0f%%", mem.percent), Color.textW, syy + 54)
+        let tempStr = temp.cpuTemp.map { String(format: "%.0f°C", $0) } ?? "—"
+        sysRow("温度", tempStr, Color.textW, syy + 80)
+        if let sys {
+            let h = sys.uptimeSeconds / 3600
+            let up = h >= 24 ? "\(h / 24)d \(h % 24)h" : "\(h)h \((sys.uptimeSeconds % 3600) / 60)m"
+            sysRow("开机", up, Color.textS, syy + 106)
+        }
+    }
+
+    private func rate(_ bps: Double) -> String {
+        if bps < 1024 { return String(format: "%.0f B/s", max(0, bps)) }
+        if bps < 1024 * 1024 { return String(format: "%.0f KB/s", bps / 1024) }
+        return String(format: "%.1f MB/s", bps / 1024 / 1024)
+    }
+
+    /// Local lunar (Chinese) calendar: ganzhi year + zodiac + month/day. No network.
+    private func lunarString(_ date: Date) -> String {
+        let cal = Calendar(identifier: .chinese)
+        let c = cal.dateComponents([.year, .month, .day, .isLeapMonth], from: date)
+        guard let y = c.year, let m = c.month, let d = c.day else { return "" }
+        let stems = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
+        let branches = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
+        let zodiac = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
+        let months = ["正", "二", "三", "四", "五", "六", "七", "八", "九", "十", "冬", "腊"]
+        let days = ["", "初一", "初二", "初三", "初四", "初五", "初六", "初七", "初八", "初九", "初十",
+                    "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十",
+                    "廿一", "廿二", "廿三", "廿四", "廿五", "廿六", "廿七", "廿八", "廿九", "三十"]
+        let gz = stems[(y - 1) % 10] + branches[(y - 1) % 12]
+        let zod = zodiac[(y - 1) % 12]
+        let leap = (c.isLeapMonth ?? false) ? "闰" : ""
+        let mon = leap + months[(m - 1) % 12] + "月"
+        let day = (d >= 1 && d < days.count) ? days[d] : "\(d)"
+        return "\(gz)\(zod)年 \(mon)\(day)"
     }
 
     // MARK: - Bongo Cat (real line-art sprite, kuroni/bongocat-osu)
