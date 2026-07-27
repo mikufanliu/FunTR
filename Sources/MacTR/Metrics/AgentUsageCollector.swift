@@ -221,14 +221,20 @@ final class AgentUsageCollector: @unchecked Sendable {
         var message: String?
         var attention = false
         var stateDetermined = false
+        var pendingSubagents = false  // sub-agents still running as the newest activity
         var crossedUserTurn = false   // scanned past a real user message → older todos are stale
         var step: (Int, Int, String)?
         for line in tailLines(path: path, maxBytes: 256 * 1024).reversed() {
             let isAssistant = line.contains("\"type\":\"assistant\"")
             let isUser = line.contains("\"type\":\"user\"")
             guard isAssistant || isUser, let obj = parseJSON(line) else { continue }
-            // Subagent side chains don't reflect the main conversation state
-            if obj["isSidechain"] as? Bool == true { continue }
+            // Subagent side chains don't drive the message/step display, but if one is
+            // among the NEWEST activity (seen before any main-chain decision), the main
+            // agent is still waiting on its sub-agents → working, not waiting on you.
+            if obj["isSidechain"] as? Bool == true {
+                if !stateDetermined { pendingSubagents = true }
+                continue
+            }
 
             if isUser, obj["type"] as? String == "user" {
                 // A real user message (not a tool_result) is a turn boundary: a
@@ -272,7 +278,9 @@ final class AgentUsageCollector: @unchecked Sendable {
                 }
             }
             if !stateDetermined {
-                attention = !sawToolUse   // text-only final message → your turn
+                // text-only final message → your turn, UNLESS sub-agents are still
+                // running (their sidechain activity is newer than this message).
+                attention = !sawToolUse && !pendingSubagents
                 stateDetermined = true
             }
             // Stop once the message + state are known and the step is either found
