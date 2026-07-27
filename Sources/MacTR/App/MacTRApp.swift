@@ -7,7 +7,6 @@
 
 import AppKit
 import os
-import Sparkle
 import SwiftUI
 
 private let mactrLogger = Logger(subsystem: "com.beret21.MacTR", category: "main")
@@ -165,13 +164,6 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
     private var previewWindow: NSWindow?
     private var previewImageView: NSImageView?
     private var previewTimer: Timer?
-
-    // Sparkle auto-updater — only start when running from a real .app bundle;
-    // a bare `swift build` binary has no Info.plist for Sparkle to work with
-    private let updaterController = SPUStandardUpdaterController(
-        startingUpdater: Bundle.main.bundleIdentifier != nil
-            && Bundle.main.bundlePath.hasSuffix(".app"),
-        updaterDelegate: nil, userDriverDelegate: nil)
 
     // Menu items that need updating
     private var statusMenuItem: NSMenuItem!
@@ -338,14 +330,6 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
         menu.addItem(previewItem)
 
         menu.addItem(.separator())
-
-        // Check for Updates
-        let checkUpdatesItem = NSMenuItem(
-            title: "Check for Updates...",
-            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
-            keyEquivalent: "u")
-        checkUpdatesItem.target = updaterController
-        menu.addItem(checkUpdatesItem)
 
         // About
         let aboutItem = NSMenuItem(title: "About MacTR", action: #selector(showAbout), keyEquivalent: "")
