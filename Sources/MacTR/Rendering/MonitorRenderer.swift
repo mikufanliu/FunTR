@@ -603,18 +603,28 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         Draw.panel(ctx, x: x, y: py, w: pw, h: ph, accent: accent)
         Draw.text(ctx, "SKADI", x: x + 20, y: py + 14,
                   font: Fonts.system(24, weight: .bold), color: accent)
-        let status = busy ? "工作中" : "待机"
+        let status = busy ? "作战中" : "驻扎"
         let sF = Fonts.system(16, weight: .medium)
         let sW = (status as NSString).size(withAttributes: [.font: sF]).width
         Draw.text(ctx, status, x: Int(CGFloat(x + pw - 20) - sW), y: py + 20,
                   font: sF, color: busy ? Color.green : Color.textL)
 
-        let frames = busy ? SkadiAsset.moveFrames : SkadiAsset.relaxFrames
+        // Behaviour state machine: while an agent works she cycles COMBAT behaviours
+        // (skills, with a battle-idle beat between); while idle she cycles BASE
+        // behaviours (mostly relax, occasional interact/move, and a nap). Each
+        // behaviour holds for `dwell` seconds, chosen by wall-clock so it's stateless.
+        let now = Date().timeIntervalSince1970
+        let dwell = 6.0
+        let combat: [[CGImage]] = [SkadiAsset.skill2, SkadiAsset.battleIdle,
+                                   SkadiAsset.skill3, SkadiAsset.battleIdle]
+        let base: [[CGImage]] = [SkadiAsset.relax, SkadiAsset.relax, SkadiAsset.interact,
+                                 SkadiAsset.move, SkadiAsset.relax, SkadiAsset.sleep]
+        let clips = busy ? combat : base
+        let fps: Double = busy ? 16 : 10
+        var frames = clips[Int(now / dwell) % clips.count]
+        if frames.isEmpty { frames = busy ? SkadiAsset.battleIdle : SkadiAsset.relax }
         guard !frames.isEmpty else { return }
-        // Wall-clock frame pick; idle plays slower (gentle breathing) than working.
-        let fps: Double = busy ? 14 : 8
-        let idx = Int(Date().timeIntervalSince1970 * fps) % frames.count
-        let img = frames[max(0, idx)]
+        let img = frames[Int(now * fps) % frames.count]
 
         // Fit into the panel body, feet near the bottom.
         let bodyTop = py + 48
