@@ -37,15 +37,20 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         log("[Metrics] Test flash enabled for \(Int(seconds))s")
     }
 
-    private func withAttention(_ u: AgentUsage) -> AgentUsage {
-        AgentUsage(available: u.available,
-                   todayInputTokens: u.todayInputTokens,
-                   todayOutputTokens: u.todayOutputTokens,
-                   secondsSinceActive: u.secondsSinceActive,
-                   project: u.project, activity: u.activity,
-                   quotaUsedPercent: u.quotaUsedPercent,
-                   quotaResetsAt: u.quotaResetsAt,
-                   needsAttention: true)
+    /// Force every entry into the attention (flash) state — for --test-flash preview.
+    private func allFlashing(_ s: AgentsSnapshot) -> AgentsSnapshot {
+        let flashed = s.entries.map { e in
+            AgentEntry(kind: e.kind, id: e.id, project: e.project, message: e.message,
+                       secondsSinceActive: e.secondsSinceActive, waiting: true, flash: true,
+                       isWorking: false, stepCurrent: e.stepCurrent,
+                       stepTotal: e.stepTotal, stepText: e.stepText)
+        }
+        return AgentsSnapshot(entries: flashed,
+                              claudeAvailable: s.claudeAvailable, codexAvailable: s.codexAvailable,
+                              claudeTodayTokens: s.claudeTodayTokens,
+                              codexTodayTokens: s.codexTodayTokens,
+                              codexQuotaUsedPercent: s.codexQuotaUsedPercent,
+                              codexQuotaResetsAt: s.codexQuotaResetsAt)
     }
 
     /// Start background metrics collection. Call before first render().
@@ -92,8 +97,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         // Heavy CPU → Pikachu crackles with electricity, worth animating smoothly
         if let c = _cpu, c.total > 55 { return true }
         guard let a = _agents else { return false }
-        return a.claude.isWorking || a.claude.needsAttention
-            || a.codex.isWorking || a.codex.needsAttention
+        return a.anyLive
     }
 
     private func metricsLoop() {
@@ -150,38 +154,41 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let temp = TemperatureSnapshot(cpuTemp: 52, gpuTemp: 45, thermalState: 0)
         let sys = SystemSnapshot(uptimeSeconds: 27 * 3600 + 3 * 60, processCount: 612)
         let agents = AgentsSnapshot(
-            claude: AgentUsage(available: true,
-                               todayInputTokens: 48_300_000, todayOutputTokens: 512_000,
-                               secondsSinceActive: 3, project: "MacTR",
-                               activity: """
-                               已完成 AI Agents 面板的三项优化，改动集中在两个文件：
+            entries: [
+                AgentEntry(kind: .codex, id: "codex:web-service", project: "web-service",
+                           message: """
+                           预发环境冒烟测试已通过，是否部署到生产？涉及四个服务：
 
-                               | 文件 | 改动 |
-                               |---|---|
-                               | Collector | 解析消息与待办 |
-                               | Renderer | 表格化排版 |
-                               """,
-                               isWorking: true,
-                               stepCurrent: 3, stepTotal: 4,
-                               stepText: "渲染 Claude 消息表格"),
-            codex: AgentUsage(available: true,
-                              todayInputTokens: 60_100_000, todayOutputTokens: 375_000,
-                              secondsSinceActive: 6, project: "web-service",
-                              activity: """
-                              已完成部署，四个服务全部推送到 `main`：
-
-                              | 服务 | 提交 | 文件 |
-                              |---|---|---:|
-                              | `api-gateway` | `a4872c56` | 24 |
-                              | `auth-service` | `4d6934de` | 10 |
-                              | `web-client` | `9b0e17aa` | 32 |
-                              | `job-worker` | `ac02bea6` | 88 |
-                              """,
-                              quotaUsedPercent: 57,
-                              quotaResetsAt: Date().addingTimeInterval(3600 * 24 * 6),
-                              isWorking: true,
-                              stepCurrent: 4, stepTotal: 6,
-                              stepText: "部署到预发环境并跑冒烟测试"))
+                           | 服务 | 提交 | 文件 |
+                           |---|---|---:|
+                           | `api-gateway` | `a4872c56` | 24 |
+                           | `auth-service` | `4d6934de` | 10 |
+                           | `web-client` | `9b0e17aa` | 32 |
+                           | `job-worker` | `ac02bea6` | 88 |
+                           """,
+                           secondsSinceActive: 4, waiting: true, flash: true, isWorking: false,
+                           stepCurrent: 4, stepTotal: 6, stepText: "部署到预发环境并跑冒烟测试"),
+                AgentEntry(kind: .claude, id: "claude:knight-server", project: "knight-server",
+                           message: "已完成回流检测埋点，改动集中在 ReflowService 与登录处理。",
+                           secondsSinceActive: 3, waiting: false, flash: false, isWorking: true,
+                           stepCurrent: 3, stepTotal: 4, stepText: "渲染 Claude 消息表格"),
+                AgentEntry(kind: .claude, id: "claude:MacTR", project: "MacTR",
+                           message: "正在把 AI Agents 面板重构成控制塔布局。",
+                           secondsSinceActive: 11, waiting: false, flash: false, isWorking: true,
+                           stepCurrent: 2, stepTotal: 2, stepText: "列表 + 自动聚焦详情"),
+                AgentEntry(kind: .claude, id: "claude:game_server", project: "game_server",
+                           message: "活动配置已更新完毕。", secondsSinceActive: 12 * 60,
+                           waiting: false, flash: false, isWorking: false,
+                           stepCurrent: nil, stepTotal: nil, stepText: nil),
+                AgentEntry(kind: .codex, id: "codex:scripts", project: "scripts",
+                           message: "批处理脚本执行完成。", secondsSinceActive: 62 * 60,
+                           waiting: false, flash: false, isWorking: false,
+                           stepCurrent: nil, stepTotal: nil, stepText: nil),
+            ],
+            claudeAvailable: true, codexAvailable: true,
+            claudeTodayTokens: 48_800_000, codexTodayTokens: 60_500_000,
+            codexQuotaUsedPercent: 57,
+            codexQuotaResetsAt: Date().addingTimeInterval(3600 * 24 * 6))
         return (cpu, mem, temp, sys, agents)
     }
 
@@ -227,8 +234,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         }
 
         if let until = testFlashUntil, Date() < until {
-            agents = AgentsSnapshot(claude: withAttention(agents.claude),
-                                    codex: withAttention(agents.codex))
+            agents = allFlashing(agents)
         }
 
         // Reuse CGContext to prevent CG raster data memory growth
@@ -253,8 +259,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         Draw.gradientBackground(ctx)
 
         // Panels
-        let agentsBusy = agents.claude.isWorking || agents.claude.needsAttention
-            || agents.codex.isWorking || agents.codex.needsAttention
+        let agentsBusy = agents.anyLive
         renderCPU(ctx, cpu: cpu, temp: temp, agentsBusy: agentsBusy)
         renderAgents(ctx, agents: agents)
         renderMemory(ctx, mem: mem, sys: sys, agentsBusy: agentsBusy)
@@ -590,168 +595,224 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let py = Layout.panelY
         let ph = Layout.panelHeight
 
-        Draw.panel(ctx, x: x, y: py, w: pw, h: ph, accent: Color.purple)
+        // Whole-panel accent turns red while any agent is waiting on you.
+        let waiting = agents.anyWaiting
+        Draw.panel(ctx, x: x, y: py, w: pw, h: ph, accent: waiting ? Color.red : Color.purple)
+
+        // Priority sort: waiting > working > idle, ties broken by recency.
+        func rank(_ e: AgentEntry) -> Int { e.waiting ? 0 : (e.isWorking ? 1 : 2) }
+        let sorted = agents.entries.sorted {
+            rank($0) != rank($1) ? rank($0) < rank($1)
+                : $0.secondsSinceActive < $1.secondsSinceActive
+        }
+        // Auto-focus = the top of that order: a waiting agent, else the freshest.
+        let focus = sorted.first
+
+        // Header + live count
         Draw.text(ctx, "AI AGENTS", x: x + 20, y: py + 14,
-                  font: Fonts.system(24, weight: .bold), color: Color.purple)
+                  font: Fonts.system(24, weight: .bold),
+                  color: waiting ? Color.red : Color.purple)
+        let live = agents.entries.filter { $0.isWorking || $0.waiting }.count
+        let sub = "\(agents.entries.count) 会话 · \(live) 活跃"
+        let subF = Fonts.system(16, weight: .medium)
+        let subW = (sub as NSString).size(withAttributes: [.font: subF]).width
+        Draw.text(ctx, sub, x: Int(CGFloat(x + pw - 20) - subW), y: py + 20,
+                  font: subF, color: Color.textL)
 
-        // Vertical divider between columns
-        let midX = x + pw / 2
-        Draw.line(ctx, from: CGPoint(x: midX, y: py + 52),
-                  to: CGPoint(x: midX, y: py + ph - 14), color: Color.border)
+        // Layout: left list (~40%) | divider | right detail; token footer at the bottom.
+        let contentTop = py + 52
+        let footerH = 30
+        let contentBottom = py + ph - footerH - 8
+        let listW = Int(Double(pw) * 0.40)
+        let detailX = x + listW + 20
+        let detailW = pw - listW - 40
 
-        let colW = pw / 2 - 40
-        renderAgentColumn(ctx, x: x + 22, w: colW, py: py,
-                          name: "CLAUDE", accent: Color.claude, usage: agents.claude)
-        renderAgentColumn(ctx, x: midX + 18, w: colW, py: py,
-                          name: "CODEX", accent: Color.cyan, usage: agents.codex)
+        Draw.line(ctx, from: CGPoint(x: detailX - 12, y: contentTop),
+                  to: CGPoint(x: detailX - 12, y: contentBottom), color: Color.border)
+
+        renderAgentList(ctx, entries: sorted, focusID: focus?.id, x: x + 20,
+                        w: listW - 24, top: contentTop, bottom: contentBottom)
+        if let f = focus {
+            renderAgentDetail(ctx, entry: f, x: detailX, w: detailW,
+                              top: contentTop, bottom: contentBottom)
+        } else {
+            Draw.text(ctx, agents.entries.isEmpty ? "无活跃会话" : "—",
+                      x: detailX, y: contentTop + 16,
+                      font: Fonts.system(22), color: Color.textL)
+        }
+
+        renderAgentFooter(ctx, agents: agents, x: x + 20, w: pw - 40, y: py + ph - footerH + 6)
     }
 
-    private func renderAgentColumn(_ ctx: CGContext, x: Int, w: Int, py: Int,
-                                   name: String, accent: CGColor, usage: AgentUsage) {
-        let ph = Layout.panelHeight
+    private func agentAccent(_ k: AgentKind) -> CGColor {
+        k == .claude ? Color.claude : Color.cyan
+    }
 
-        // Column background — three states, agent-tinted:
-        //   needsAttention (done / waiting) → hard on/off blink (high-contrast alert)
-        //   isWorking      (running a turn)  → slow, gentle breathing (~5s period)
-        //   idle                            → static tint
-        // render() runs every 0.5s, smooth enough for both sin() and the blink.
-        let bgRect = CGRect(x: CGFloat(x - 12), y: CGFloat(py + 42),
-                            width: CGFloat(w + 24), height: CGFloat(ph - 56))
-        let bgPath = CGPath(roundedRect: bgRect, cornerWidth: 12, cornerHeight: 12,
-                            transform: nil)
-        let base: CGFloat = name == "CLAUDE" ? 0.09 : 0.08
+    private func statusColor(_ e: AgentEntry) -> CGColor {
+        if e.waiting { return Color.red }
+        if e.isWorking { return Color.green }
+        return Color.textL
+    }
+
+    private func firstLine(_ s: String?) -> String? {
+        guard let s = s else { return nil }
+        let line = s.split(separator: "\n").first.map(String.init) ?? s
+        let t = line.trimmingCharacters(in: .whitespaces)
+        return t.isEmpty ? nil : t
+    }
+
+    private func idleText(_ secs: Int) -> String {
+        if secs < 60 { return "空闲 \(secs)s" }
+        if secs < 3600 { return "空闲 \(secs / 60)m" }
+        if secs < 86400 { return "空闲 \(secs / 3600)h" }
+        return "空闲 \(secs / 86400)d"
+    }
+
+    private func agoText(_ s: Int) -> String {
+        if s < 90 { return "刚刚" }
+        if s < 3600 { return "\(s / 60)m 前" }
+        if s < 86400 { return "\(s / 3600)h 前" }
+        return "\(s / 86400)d 前"
+    }
+
+    /// Left column: one compact row per session, sorted, focus row highlighted.
+    private func renderAgentList(_ ctx: CGContext, entries: [AgentEntry], focusID: String?,
+                                 x: Int, w: Int, top: Int, bottom: Int) {
+        let rowH = 60
+        let maxRows = max(1, (bottom - top) / rowH)
         let t = Date().timeIntervalSince1970
         let blinkOn = Int(t * 2) % 2 == 0
-        // Linear triangle breathing (0→1→0 over 5s). A constant per-frame delta reads
-        // far smoother than cosine easing at the display's low frame rate — no stutter
-        // where the cosine flattens near its peaks/troughs.
-        let phase = t.truncatingRemainder(dividingBy: 5) / 5        // 0..1
-        let breath = CGFloat(phase < 0.5 ? phase * 2 : (1 - phase) * 2)
-        var bgAlpha = base
-        if usage.needsAttention {
-            bgAlpha = blinkOn ? 0.36 : 0.10
-        } else if usage.isWorking {
-            bgAlpha = base + 0.13 * breath
-        }
-        ctx.setFillColor(accent.copy(alpha: bgAlpha) ?? accent)
-        ctx.addPath(bgPath)
-        ctx.fillPath()
-        if usage.needsAttention {
-            ctx.setStrokeColor(accent.copy(alpha: blinkOn ? 0.9 : 0.25) ?? accent)
-            ctx.setLineWidth(2)
-            ctx.addPath(bgPath)
-            ctx.strokePath()
-        } else if usage.isWorking {
-            // Faint breathing border to reinforce the "alive/working" feel
-            ctx.setStrokeColor(accent.copy(alpha: 0.12 + 0.28 * breath) ?? accent)
-            ctx.setLineWidth(1.5)
-            ctx.addPath(bgPath)
-            ctx.strokePath()
-        }
 
-        // Header: name + activity indicator (right-aligned "● now" / "12m ago")
-        Draw.text(ctx, name, x: x, y: py + 50,
-                  font: Fonts.system(24, weight: .bold), color: accent)
-        let active = (usage.secondsSinceActive ?? Int.max) < 90
-        let agoStr: String
-        if !usage.available {
-            agoStr = "not found"
-        } else if let s = usage.secondsSinceActive {
-            agoStr = active ? "now"
-                : (s < 3600 ? "\(s / 60)m ago"
-                   : (s < 86400 ? "\(s / 3600)h ago" : "\(s / 86400)d ago"))
-        } else {
-            agoStr = "no session"
-        }
-        let agoFont = Fonts.system(17, weight: .medium)
-        let agoColor = active ? Color.green : Color.textD
-        let agoW = (agoStr as NSString).size(withAttributes: [.font: agoFont]).width
-        Draw.text(ctx, agoStr, x: Int(CGFloat(x + w) - agoW), y: py + 56,
-                  font: agoFont, color: agoColor)
-        let dotR: CGFloat = 5
-        ctx.setFillColor(agoColor)
-        ctx.fillEllipse(in: CGRect(x: CGFloat(x + w) - agoW - dotR * 2 - 8,
-                                   y: CGFloat(py + 56) + 10 - dotR,
-                                   width: dotR * 2, height: dotR * 2))
+        for (i, e) in entries.prefix(maxRows).enumerated() {
+            let ry = top + i * rowH
+            let accent = agentAccent(e.kind)
 
-        // Current session — TOP. Project (+ step badge), plan progress, live activity.
-        var y = py + 90
-        if let project = usage.project {
-            // Step badge "步骤 4/6" right-aligned on the project line, when a plan exists
-            var projMaxW = CGFloat(w)
-            if let cur = usage.stepCurrent, let total = usage.stepTotal {
-                let badge = "步骤 \(cur)/\(total)"
-                let bFont = Fonts.system(18, weight: .semibold)
-                let bW = (badge as NSString).size(withAttributes: [.font: bFont]).width
-                Draw.text(ctx, badge, x: Int(CGFloat(x + w) - bW), y: y + 4,
-                          font: bFont, color: accent)
-                projMaxW = CGFloat(w) - bW - 16
+            if e.id == focusID {
+                let r = CGRect(x: CGFloat(x - 10), y: CGFloat(ry - 2),
+                               width: CGFloat(w + 20), height: CGFloat(rowH - 8))
+                let p = CGPath(roundedRect: r, cornerWidth: 8, cornerHeight: 8, transform: nil)
+                ctx.setFillColor(accent.copy(alpha: 0.13) ?? accent)
+                ctx.addPath(p); ctx.fillPath()
+                ctx.setFillColor(accent)
+                ctx.fill(CGRect(x: CGFloat(x - 10), y: CGFloat(ry - 2),
+                                width: 3, height: CGFloat(rowH - 8)))
             }
-            Draw.text(ctx, truncate(project, font: Fonts.system(26, weight: .semibold),
-                                    maxW: projMaxW),
-                      x: x, y: y, font: Fonts.system(26, weight: .semibold), color: Color.textW)
-            y += 38
-        }
 
-        // Plan progress — compact segmented bar (the badge conveys N/M; no text line,
-        // so the message below gets the room)
-        if let cur = usage.stepCurrent, let total = usage.stepTotal, total > 0 {
-            drawStepBar(ctx, x: x, y: y, w: w, current: cur, total: total, accent: accent)
-            y += 20
-        }
+            // Status dot (waiting flashes)
+            let sc = statusColor(e)
+            let dotA: CGFloat = e.flash ? (blinkOn ? 1.0 : 0.22) : 1.0
+            ctx.setFillColor(sc.copy(alpha: dotA) ?? sc)
+            ctx.fillEllipse(in: CGRect(x: CGFloat(x + 2), y: CGFloat(ry + 9),
+                                       width: 12, height: 12))
 
-        // Latest message — what the agent last said (never the commands it ran).
-        // Markdown tables/lists are laid out structurally; plain text just wraps.
-        let actText = usage.activity ?? (usage.available ? "空闲" : "—")
-        let msgBottom = py + ph - 140   // token divider sits here
-        renderMessage(ctx, text: actText, x: x, y: y, w: w, bottom: msgBottom, accent: accent)
-
-        // Token usage — large, anchored near the bottom of the column
-        let tokY = py + ph - 126
-        Draw.line(ctx, from: CGPoint(x: x, y: tokY - 12),
-                  to: CGPoint(x: x + w, y: tokY - 12), color: Color.border)
-        Draw.text(ctx, "今日 Token", x: x, y: tokY,
-                  font: Fonts.system(19), color: Color.textL)
-        Draw.text(ctx, formatTokensCN(usage.todayTotalTokens), x: x, y: tokY + 24,
-                  font: Fonts.system(46, weight: .bold), color: Color.textW)
-
-        // In / Out — right-aligned, level with the label + big number
-        let ioFont = Fonts.system(20, weight: .medium)
-        let ioRows: [(String, UInt64)] = [
-            ("In", usage.todayInputTokens),
-            ("Out", usage.todayOutputTokens),
-        ]
-        for (i, row) in ioRows.enumerated() {
-            let ry = tokY + 6 + i * 30
-            let valStr = formatTokensCN(row.1)
-            let valW = (valStr as NSString).size(withAttributes: [.font: ioFont]).width
-            Draw.text(ctx, valStr, x: Int(CGFloat(x + w) - valW), y: ry,
-                      font: ioFont, color: Color.textS)
-            let labelW = (row.0 as NSString).size(withAttributes: [.font: ioFont]).width
-            Draw.text(ctx, row.0, x: Int(CGFloat(x + w) - valW - labelW - 10), y: ry,
-                      font: ioFont, color: Color.textL)
-        }
-
-        // Quota (Codex): remaining percentage + reset countdown + bar
-        if let used = usage.quotaUsedPercent {
-            let remaining = max(0, 100 - used)
-            let qColor: CGColor = remaining > 50 ? Color.green
-                : (remaining > 20 ? Color.orange : Color.red)
-            let qy = tokY + 78
-            Draw.text(ctx, String(format: "剩余额度 %.0f%%", remaining), x: x, y: qy,
-                      font: Fonts.system(21, weight: .medium), color: qColor)
-            if let resets = usage.quotaResetsAt {
-                let secs = max(0, Int(resets.timeIntervalSinceNow))
-                let resetStr = secs >= 86400 ? "\(secs / 86400)天后重置"
-                    : (secs >= 3600 ? "\(secs / 3600)小时后重置" : "\(max(secs / 60, 1))分钟后重置")
-                let rFont = Fonts.system(17)
-                let rW = (resetStr as NSString).size(withAttributes: [.font: rFont]).width
-                Draw.text(ctx, resetStr, x: Int(CGFloat(x + w) - rW), y: qy + 3,
-                          font: rFont, color: Color.textD)
+            // Title: "Codex · project"  (+ step badge right)
+            let title = "\(e.kind.rawValue) · \(e.project ?? "—")"
+            let tF = Fonts.system(21, weight: .semibold)
+            var titleMaxW = CGFloat(w - 24)
+            if let cur = e.stepCurrent, let tot = e.stepTotal {
+                let badge = "\(cur)/\(tot)"
+                let bF = Fonts.system(16, weight: .semibold)
+                let bW = (badge as NSString).size(withAttributes: [.font: bF]).width
+                Draw.text(ctx, badge, x: Int(CGFloat(x + w) - bW), y: ry + 4,
+                          font: bF, color: accent)
+                titleMaxW -= bW + 10
             }
-            Draw.bar(ctx, x: x, y: qy + 28, w: w, h: 8,
-                     percent: remaining, color: qColor)
+            Draw.text(ctx, truncate(title, font: tF, maxW: titleMaxW),
+                      x: x + 24, y: ry, font: tF, color: Color.textW)
+
+            // Second line: status text
+            let (statusText, statusCol): (String, CGColor)
+            if e.waiting {
+                (statusText, statusCol) = ("等你输入", Color.red)
+            } else if e.isWorking {
+                (statusText, statusCol) = (e.stepText ?? firstLine(e.message) ?? "运行中…", Color.green)
+            } else {
+                (statusText, statusCol) = (idleText(e.secondsSinceActive), Color.textL)
+            }
+            let s2F = Fonts.system(16)
+            Draw.text(ctx, truncate(statusText, font: s2F, maxW: CGFloat(w - 24)),
+                      x: x + 24, y: ry + 28, font: s2F, color: statusCol)
         }
+
+        if entries.count > maxRows {
+            Draw.text(ctx, "+\(entries.count - maxRows) 更多", x: x + 24,
+                      y: top + maxRows * rowH, font: Fonts.system(15), color: Color.textD)
+        }
+    }
+
+    /// Right column: the auto-focused session, expanded — header, step, full message.
+    private func renderAgentDetail(_ ctx: CGContext, entry e: AgentEntry,
+                                   x: Int, w: Int, top: Int, bottom: Int) {
+        let accent = agentAccent(e.kind)
+        var y = top
+
+        // Header: "Codex · project"  + ago (right)
+        let ago = agoText(e.secondsSinceActive)
+        let agoActive = e.secondsSinceActive < 90
+        let agoF = Fonts.system(16, weight: .medium)
+        let agoW = (ago as NSString).size(withAttributes: [.font: agoF]).width
+        Draw.text(ctx, ago, x: Int(CGFloat(x + w) - agoW), y: y + 8,
+                  font: agoF, color: agoActive ? Color.green : Color.textD)
+        let title = "\(e.kind.rawValue) · \(e.project ?? "—")"
+        let tF = Fonts.system(27, weight: .bold)
+        Draw.text(ctx, truncate(title, font: tF, maxW: CGFloat(w) - agoW - 16),
+                  x: x, y: y, font: tF, color: accent)
+        y += 42
+
+        // Waiting badge (blinking) — the reason it was auto-focused
+        if e.waiting {
+            let on = Int(Date().timeIntervalSince1970 * 2) % 2 == 0
+            let c = Color.red.copy(alpha: on ? 1 : 0.4) ?? Color.red
+            ctx.setFillColor(c)
+            ctx.fillEllipse(in: CGRect(x: CGFloat(x), y: CGFloat(y + 3), width: 13, height: 13))
+            Draw.text(ctx, "等你输入 / 需确认", x: x + 22, y: y,
+                      font: Fonts.system(20, weight: .semibold), color: Color.red)
+            y += 34
+        }
+
+        // Step: text (left) + "步骤 x/y" (right) + segmented bar
+        if let cur = e.stepCurrent, let tot = e.stepTotal, tot > 0 {
+            let badge = "步骤 \(cur)/\(tot)"
+            let bF = Fonts.system(17, weight: .semibold)
+            let bW = (badge as NSString).size(withAttributes: [.font: bF]).width
+            Draw.text(ctx, badge, x: Int(CGFloat(x + w) - bW), y: y, font: bF, color: accent)
+            if let st = e.stepText {
+                Draw.text(ctx, truncate(st, font: Fonts.system(17), maxW: CGFloat(w) - bW - 16),
+                          x: x, y: y, font: Fonts.system(17), color: Color.textS)
+            }
+            y += 26
+            drawStepBar(ctx, x: x, y: y, w: w, current: cur, total: tot, accent: accent)
+            y += 22
+        }
+        y += 6
+
+        // Full message (markdown tables/lists laid out structurally)
+        renderMessage(ctx, text: e.message ?? "—", x: x, y: y, w: w, bottom: bottom, accent: accent)
+    }
+
+    /// Slim footer: today's aggregate token + Codex quota (token intentionally demoted).
+    private func renderAgentFooter(_ ctx: CGContext, agents: AgentsSnapshot,
+                                   x: Int, w: Int, y: Int) {
+        Draw.line(ctx, from: CGPoint(x: x, y: y - 8),
+                  to: CGPoint(x: x + w, y: y - 8), color: Color.border)
+        var parts: [String] = []
+        if agents.claudeAvailable {
+            parts.append("Claude \(formatTokensCN(agents.claudeTodayTokens))")
+        }
+        if agents.codexAvailable {
+            parts.append("Codex \(formatTokensCN(agents.codexTodayTokens))")
+        }
+        var line = "今日 Token  " + parts.joined(separator: "  ·  ")
+        if let used = agents.codexQuotaUsedPercent {
+            line += String(format: "  ·  额度 %.0f%%", max(0, 100 - used))
+            if let r = agents.codexQuotaResetsAt {
+                let s = max(0, Int(r.timeIntervalSinceNow))
+                let rs = s >= 86400 ? "\(s / 86400)天后"
+                    : (s >= 3600 ? "\(s / 3600)时后" : "\(max(s / 60, 1))分后")
+                line += "(\(rs))"
+            }
+        }
+        Draw.text(ctx, line, x: x, y: y, font: Fonts.system(16), color: Color.textL)
     }
 
     /// Segmented plan-progress bar: completed steps solid, current bright, pending dim.

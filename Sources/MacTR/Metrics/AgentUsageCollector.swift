@@ -13,46 +13,41 @@ import Foundation
 
 // MARK: - Data Structures
 
-struct AgentUsage: Sendable {
-    let available: Bool             // data directory exists at all
-    let todayInputTokens: UInt64    // includes cache read/write tokens
-    let todayOutputTokens: UInt64
-    let secondsSinceActive: Int?    // nil = no session today
-    let project: String?            // cwd basename of most recent session
-    let activity: String?           // latest tool call / message summary
-    let quotaUsedPercent: Double?   // rate-limit window usage (Codex only for now)
-    let quotaResetsAt: Date?
-    let needsAttention: Bool        // turn finished / waiting for user — flash the column
-    let isWorking: Bool             // actively running a turn — slow breathing background
-    let stepCurrent: Int?           // active plan step (1-based); nil = no plan
-    let stepTotal: Int?             // total plan steps
-    let stepText: String?           // description of the active step
-    var todayTotalTokens: UInt64 { todayInputTokens + todayOutputTokens }
-
-    init(available: Bool, todayInputTokens: UInt64, todayOutputTokens: UInt64,
-         secondsSinceActive: Int?, project: String?, activity: String?,
-         quotaUsedPercent: Double? = nil, quotaResetsAt: Date? = nil,
-         needsAttention: Bool = false, isWorking: Bool = false,
-         stepCurrent: Int? = nil, stepTotal: Int? = nil, stepText: String? = nil) {
-        self.available = available
-        self.todayInputTokens = todayInputTokens
-        self.todayOutputTokens = todayOutputTokens
-        self.secondsSinceActive = secondsSinceActive
-        self.project = project
-        self.activity = activity
-        self.quotaUsedPercent = quotaUsedPercent
-        self.quotaResetsAt = quotaResetsAt
-        self.needsAttention = needsAttention
-        self.isWorking = isWorking
-        self.stepCurrent = stepCurrent
-        self.stepTotal = stepTotal
-        self.stepText = stepText
-    }
+enum AgentKind: String, Sendable {
+    case claude = "Claude"
+    case codex = "Codex"
 }
 
+/// One live/recent CLI session — a single card in the control-tower list.
+struct AgentEntry: Sendable {
+    let kind: AgentKind
+    let id: String                  // stable key (kind + project) for flash edge tracking
+    let project: String?            // cwd basename
+    let message: String?            // last thing it said (markdown preserved)
+    let secondsSinceActive: Int
+    let waiting: Bool               // turn ended, waiting for the user (persistent while recent)
+    let flash: Bool                 // 10s attention pulse after `waiting` first appears
+    let isWorking: Bool             // actively running a turn
+    let stepCurrent: Int?           // active plan step (1-based); nil = no plan
+    let stepTotal: Int?
+    let stepText: String?
+}
+
+/// All recent agent sessions + account-level aggregates. Token/quota are demoted
+/// to a compact footer, so they live on the snapshot, not on each entry.
 struct AgentsSnapshot: Sendable {
-    let claude: AgentUsage
-    let codex: AgentUsage
+    let entries: [AgentEntry]
+    let claudeAvailable: Bool
+    let codexAvailable: Bool
+    let claudeTodayTokens: UInt64
+    let codexTodayTokens: UInt64
+    let codexQuotaUsedPercent: Double?
+    let codexQuotaResetsAt: Date?
+
+    /// Anything animating right now (working breathing or attention flash).
+    var anyLive: Bool { entries.contains { $0.isWorking || $0.flash } }
+    /// Anything waiting for the user (drives the whole-panel alert border).
+    var anyWaiting: Bool { entries.contains { $0.waiting } }
 }
 
 // MARK: - Collector
@@ -74,12 +69,15 @@ final class AgentUsageCollector: @unchecked Sendable {
     private var codexOutput: UInt64 = 0
 
     // Attention edge tracking — flash only for the first N seconds after the
-    // waiting/done state appears, not for as long as it persists
+    // waiting/done state appears, tracked PER session id (multiple agents at once).
     private let flashDuration: TimeInterval = 10
-    private var claudePrevAttention = false
-    private var claudeAttentionSince: Date?
-    private var codexPrevAttention = false
-    private var codexAttentionSince: Date?
+    private var attentionSince: [String: Date] = [:]   // id → rising-edge time
+    private var prevWaiting: Set<String> = []
+
+    // Control-tower list scope: a session is listed if it was active within this
+    // window, capped per CLI so a busy history can't flood the list.
+    private let liveWindow: TimeInterval = 6 * 3600
+    private let maxEntriesPerKind = 6
 
     // Last-known Codex quota (account-global). The full rate-limit block appears only
     // occasionally and the newest reading may be in a different file than the active
@@ -90,7 +88,33 @@ final class AgentUsageCollector: @unchecked Sendable {
 
     func collect() -> AgentsSnapshot {
         rolloverIfNeeded()
-        return AgentsSnapshot(claude: collectClaude(), codex: collectCodex())
+        let (cEntries, cTokens, cAvail) = collectClaude()
+        let (xEntries, xTokens, xAvail, qUsed, qResets) = collectCodex()
+        // Drop flash state for sessions that aged out of the list, so the dicts
+        // stay bounded and a returning session flashes fresh.
+        let liveIDs = Set((cEntries + xEntries).map { $0.id })
+        attentionSince = attentionSince.filter { liveIDs.contains($0.key) }
+        prevWaiting = prevWaiting.intersection(liveIDs)
+        return AgentsSnapshot(entries: cEntries + xEntries,
+                              claudeAvailable: cAvail, codexAvailable: xAvail,
+                              claudeTodayTokens: cTokens, codexTodayTokens: xTokens,
+                              codexQuotaUsedPercent: qUsed, codexQuotaResetsAt: qResets)
+    }
+
+    /// Per-session attention state. `waiting` persists while the session is recent;
+    /// `flash` pulses only for `flashDuration` after the rising edge.
+    private func attentionState(id: String, rawWaiting: Bool, ago: Int)
+        -> (waiting: Bool, flash: Bool) {
+        let waiting = rawWaiting && ago < 900
+        let now = Date()
+        if waiting && !prevWaiting.contains(id) { attentionSince[id] = now }
+        if waiting { prevWaiting.insert(id) } else { prevWaiting.remove(id) }
+        var flash = false
+        if waiting, let since = attentionSince[id],
+           now.timeIntervalSince(since) < flashDuration {
+            flash = true
+        }
+        return (waiting, flash)
     }
 
     /// Reset accumulators at local midnight. Timestamps in both formats are
@@ -113,71 +137,57 @@ final class AgentUsageCollector: @unchecked Sendable {
 
     // MARK: - Claude
 
-    private func collectClaude() -> AgentUsage {
+    private func collectClaude() -> (entries: [AgentEntry], tokens: UInt64, available: Bool) {
         let root = home + "/.claude/projects"
-        guard fm.fileExists(atPath: root) else {
-            return AgentUsage(available: false, todayInputTokens: 0, todayOutputTokens: 0,
-                              secondsSinceActive: nil, project: nil, activity: nil)
-        }
+        guard fm.fileExists(atPath: root) else { return ([], 0, false) }
 
         let todayStart = Calendar.current.startOfDay(for: Date())
-        var latestPath: String?
-        var latestMtime = Date.distantPast
+        let now = Date()
+        // One candidate per project dir: its most-recently-modified session file.
+        // (Continued/forked sessions land in the same dir; the newest one wins,
+        // which sidesteps the fork-duplication problem.)
+        var candidates: [(fallbackName: String, path: String, mtime: Date)] = []
 
         for projDir in (try? fm.contentsOfDirectory(atPath: root)) ?? [] {
             let dirPath = root + "/" + projDir
+            var best: (path: String, mtime: Date)?
             for file in (try? fm.contentsOfDirectory(atPath: dirPath)) ?? [] {
                 guard file.hasSuffix(".jsonl") else { continue }
                 let path = dirPath + "/" + file
                 guard let attrs = try? fm.attributesOfItem(atPath: path),
                       let mtime = attrs[.modificationDate] as? Date
                 else { continue }
-                // Latest session overall (any day) — drives the activity/project
-                // display so the column isn't blank on a day with no runs yet
-                if mtime > latestMtime { latestMtime = mtime; latestPath = path }
 
-                // Token counting is scoped to today only
-                guard mtime >= todayStart else { continue }
-                let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
-                consumeNewLines(path: path, size: size, offsets: &claudeOffsets,
-                                prefilter: "\"type\":\"assistant\"") { line in
-                    self.accumulateClaudeLine(line)
+                // Token counting is scoped to today only, across ALL files
+                if mtime >= todayStart {
+                    let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
+                    consumeNewLines(path: path, size: size, offsets: &claudeOffsets,
+                                    prefilter: "\"type\":\"assistant\"") { line in
+                        self.accumulateClaudeLine(line)
+                    }
                 }
+                if best == nil || mtime > best!.mtime { best = (path, mtime) }
+            }
+            if let b = best, now.timeIntervalSince(b.mtime) <= liveWindow {
+                candidates.append((projDir, b.path, b.mtime))
             }
         }
 
-        var project: String?
-        var activity: String?
-        var secondsAgo: Int?
-        var attention = false
-        var working = false
-        var step: (current: Int, total: Int, text: String)?
-        if let path = latestPath {
-            let ago = max(0, Int(Date().timeIntervalSince(latestMtime)))
-            secondsAgo = ago
-            let rawWaiting: Bool
-            (project, activity, rawWaiting, step) = claudeActivity(path: path)
-            // Actively running = not waiting on the user AND the file just changed
-            working = !rawWaiting && ago < 90
-            attention = rawWaiting
-            // Only flash for recent events — stale sessions shouldn't blink all day
-            attention = attention && ago < 900
-            // Rising edge starts a 10s flash window; afterwards the state may
-            // persist (still waiting) but the flashing stops
-            if attention && !claudePrevAttention { claudeAttentionSince = Date() }
-            claudePrevAttention = attention
-            if attention, let since = claudeAttentionSince,
-               Date().timeIntervalSince(since) >= flashDuration {
-                attention = false
-            }
+        candidates.sort { $0.mtime > $1.mtime }
+        var entries: [AgentEntry] = []
+        for c in candidates.prefix(maxEntriesPerKind) {
+            let ago = max(0, Int(now.timeIntervalSince(c.mtime)))
+            let (proj, message, rawWaiting, step) = claudeActivity(path: c.path)
+            let name = proj ?? c.fallbackName
+            let id = "claude:" + name
+            let (waiting, flash) = attentionState(id: id, rawWaiting: rawWaiting, ago: ago)
+            let working = !rawWaiting && ago < 90
+            entries.append(AgentEntry(
+                kind: .claude, id: id, project: name, message: message,
+                secondsSinceActive: ago, waiting: waiting, flash: flash, isWorking: working,
+                stepCurrent: step?.current, stepTotal: step?.total, stepText: step?.text))
         }
-        return AgentUsage(available: true, todayInputTokens: claudeInput,
-                          todayOutputTokens: claudeOutput,
-                          secondsSinceActive: secondsAgo,
-                          project: project, activity: activity,
-                          needsAttention: attention, isWorking: working,
-                          stepCurrent: step?.current, stepTotal: step?.total,
-                          stepText: step?.text)
+        return (entries, claudeInput + claudeOutput, true)
     }
 
     private func accumulateClaudeLine(_ line: String) {
@@ -303,30 +313,25 @@ final class AgentUsageCollector: @unchecked Sendable {
 
     // MARK: - Codex
 
-    private func collectCodex() -> AgentUsage {
+    private func collectCodex()
+        -> (entries: [AgentEntry], tokens: UInt64, available: Bool,
+            quotaUsed: Double?, quotaResets: Date?) {
         let root = home + "/.codex/sessions"
-        guard fm.fileExists(atPath: root) else {
-            return AgentUsage(available: false, todayInputTokens: 0, todayOutputTokens: 0,
-                              secondsSinceActive: nil, project: nil, activity: nil)
-        }
+        guard fm.fileExists(atPath: root) else { return ([], 0, false, nil, nil) }
 
-        // Session dirs are keyed by START date. Scan a rolling window of recent
-        // days: today+yesterday for token counting (a session can span midnight),
-        // plus older days only to locate the most recent session for the
-        // activity/quota display when nothing has run today.
+        // Session dirs are keyed by START date; scan a rolling window of recent days.
         let todayStart = Calendar.current.startOfDay(for: Date())
+        let now = Date()
         let df = DateFormatter()
         df.dateFormat = "yyyy/MM/dd"
         var dirs: [String] = []
         for back in 0..<14 {
-            if let d = Calendar.current.date(byAdding: .day, value: -back, to: Date()) {
+            if let d = Calendar.current.date(byAdding: .day, value: -back, to: now) {
                 dirs.append(root + "/" + df.string(from: d))
             }
         }
 
-        var latestPath: String?
-        var latestMtime = Date.distantPast
-
+        var recent: [(path: String, mtime: Date)] = []
         for dir in dirs {
             for file in (try? fm.contentsOfDirectory(atPath: dir)) ?? [] {
                 guard file.hasSuffix(".jsonl") else { continue }
@@ -334,56 +339,43 @@ final class AgentUsageCollector: @unchecked Sendable {
                 guard let attrs = try? fm.attributesOfItem(atPath: path),
                       let mtime = attrs[.modificationDate] as? Date
                 else { continue }
-                // Latest session overall — drives activity/quota display
-                if mtime > latestMtime { latestMtime = mtime; latestPath = path }
-
                 // Token counting is scoped to today only
-                guard mtime >= todayStart else { continue }
-                let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
-                consumeNewLines(path: path, size: size, offsets: &codexOffsets,
-                                prefilter: "\"token_count\"") { line in
-                    self.accumulateCodexLine(line)
+                if mtime >= todayStart {
+                    let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
+                    consumeNewLines(path: path, size: size, offsets: &codexOffsets,
+                                    prefilter: "\"token_count\"") { line in
+                        self.accumulateCodexLine(line)
+                    }
                 }
+                if now.timeIntervalSince(mtime) <= liveWindow { recent.append((path, mtime)) }
             }
         }
 
-        // Quota is account-global: the newest reading may live in a DIFFERENT session
-        // file than the most-recently-modified one, so scan across recent files by
-        // timestamp (throttled — it changes slowly).
+        // Quota is account-global (may live in a different file than the active one).
         updateCodexQuota()
 
-        var project: String?
-        var activity: String?
-        var secondsAgo: Int?
-        let quotaUsed = codexQuotaCache?.used
-        let quotaResets = codexQuotaCache?.resets
-        var attention = false
-        var working = false
-        var step: (current: Int, total: Int, text: String)?
-        if let path = latestPath {
-            let ago = max(0, Int(Date().timeIntervalSince(latestMtime)))
-            secondsAgo = ago
-            let rawWaiting: Bool
-            (project, activity, rawWaiting) = codexActivity(path: path)
-            step = codexPlan(path: path)
-            // Actively running = not waiting on the user AND the file just changed
-            working = !rawWaiting && ago < 90
-            attention = rawWaiting && ago < 900
-            if attention && !codexPrevAttention { codexAttentionSince = Date() }
-            codexPrevAttention = attention
-            if attention, let since = codexAttentionSince,
-               Date().timeIntervalSince(since) >= flashDuration {
-                attention = false
-            }
+        // Newest-first; dedup by project (one card per project). Cap the number of
+        // files we fully parse so a day of short sessions stays cheap.
+        recent.sort { $0.mtime > $1.mtime }
+        var seenProjects = Set<String>()
+        var entries: [AgentEntry] = []
+        for f in recent.prefix(maxEntriesPerKind * 3) {
+            if entries.count >= maxEntriesPerKind { break }
+            let (proj, message, rawWaiting) = codexActivity(path: f.path)
+            let name = proj ?? (f.path as NSString).lastPathComponent
+            if let p = proj, !seenProjects.insert(p).inserted { continue }
+            let ago = max(0, Int(now.timeIntervalSince(f.mtime)))
+            let step = codexPlan(path: f.path)
+            let id = "codex:" + name
+            let (waiting, flash) = attentionState(id: id, rawWaiting: rawWaiting, ago: ago)
+            let working = !rawWaiting && ago < 90
+            entries.append(AgentEntry(
+                kind: .codex, id: id, project: proj, message: message,
+                secondsSinceActive: ago, waiting: waiting, flash: flash, isWorking: working,
+                stepCurrent: step?.current, stepTotal: step?.total, stepText: step?.text))
         }
-        return AgentUsage(available: true, todayInputTokens: codexInput,
-                          todayOutputTokens: codexOutput,
-                          secondsSinceActive: secondsAgo,
-                          project: project, activity: activity,
-                          quotaUsedPercent: quotaUsed, quotaResetsAt: quotaResets,
-                          needsAttention: attention, isWorking: working,
-                          stepCurrent: step?.current, stepTotal: step?.total,
-                          stepText: step?.text)
+        let q = codexQuotaCache
+        return (entries, codexInput + codexOutput, true, q?.used, q?.resets)
     }
 
     /// Active `update_plan` → (currentStep, totalSteps, stepText), or nil.
