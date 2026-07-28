@@ -894,7 +894,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let frames = SkadiAsset.move.isEmpty ? SkadiAsset.relax : SkadiAsset.move
         if !frames.isEmpty {
             let img = frames[Int(now * SkadiAsset.fps) % frames.count]
-            let ih = fh * 0.5
+            let ih = fh * 0.42
             let iw = ih * CGFloat(img.width) / CGFloat(img.height)
             let period = 18.0
             let phase = now.truncatingRemainder(dividingBy: period) / period

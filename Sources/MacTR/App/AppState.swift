@@ -37,6 +37,11 @@ final class AppState {
     var refreshInterval: Double = 0.5
     var rotateDisplay: Bool = false
 
+    // Show the ambient room screensaver while the screen is locked (persisted).
+    var screensaverEnabled: Bool = UserDefaults.standard.object(forKey: "screensaverEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(screensaverEnabled, forKey: "screensaverEnabled") }
+    }
+
     // Metrics (for menu bar display)
     var frameCount = 0
     var lastFrameSize = 0
