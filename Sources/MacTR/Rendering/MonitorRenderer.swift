@@ -33,6 +33,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     private var reactionClip: [CGImage]?
     private var reactionUntil: TimeInterval = 0
     private var operatorPrimed = false  // skip reactions on the very first frame
+    private var _audioPlaying = false   // system is outputting sound → dance + spectrum
 
     // Reusable CGContext — avoids allocating 3.6MB every 0.5s (prevents CG raster data leak)
     private var reusableCtx: CGContext?
@@ -118,8 +119,9 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             let cpu = collector.collectCPU()
             let mem = collector.collectMemory()
             let net = collector.collectNetwork()
+            let audio = AudioService.isPlaying()
             lock.lock()
-            _cpu = cpu; _mem = mem; _net = net
+            _cpu = cpu; _mem = mem; _net = net; _audioPlaying = audio
             lock.unlock()
 
             // Slow metrics every 4th tick (~2s)
@@ -214,7 +216,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         else { return nil }
         ctx.translateBy(x: 0, y: CGFloat(h)); ctx.scaleBy(x: 1, y: -1)
         Draw.gradientBackground(ctx)
-        renderOperator(ctx, agents: agents)
+        renderOperator(ctx, agents: agents, audioPlaying: true)
         renderAgents(ctx, agents: agents)
         renderInfoPanel(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys,
                         net: NetworkSnapshot(rxBytesPerSec: 1_450_000, txBytesPerSec: 240_000))
@@ -233,10 +235,12 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let cpu: CPUSnapshot, mem: MemorySnapshot, temp: TemperatureSnapshot
         let sys: SystemSnapshot?
         let net: NetworkSnapshot?
+        let audioPlaying: Bool
         var agents: AgentsSnapshot
         if demoMode {
             (cpu, mem, temp, sys, agents) = demoData()
             net = NetworkSnapshot(rxBytesPerSec: 1_450_000, txBytesPerSec: 240_000)
+            audioPlaying = true
         } else {
             // Read cached metrics (never blocks — uses latest available values)
             lock.lock()
@@ -244,6 +248,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
                 lock.unlock(); return nil
             }
             cpu = c; mem = m; temp = tp; agents = a; sys = _sys; net = _net
+            audioPlaying = _audioPlaying
             lock.unlock()
         }
 
@@ -273,7 +278,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         Draw.gradientBackground(ctx)
 
         // Panels
-        renderOperator(ctx, agents: agents)
+        renderOperator(ctx, agents: agents, audioPlaying: audioPlaying)
         renderAgents(ctx, agents: agents)
         renderInfoPanel(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys, net: net)
 
@@ -742,7 +747,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     /// Animated Skadi chibi in the left panel. She walks (Move) while any agent is
     /// working, and idles (Relax) otherwise. The old CPU panel (`renderCPU`) is kept
     /// intact as a component so a future layout preset can swap it back in.
-    private func renderOperator(_ ctx: CGContext, agents: AgentsSnapshot) {
+    private func renderOperator(_ ctx: CGContext, agents: AgentsSnapshot, audioPlaying: Bool) {
         let x = Layout.panelX(0)
         let pw = Layout.panelWidth
         let py = Layout.panelY
@@ -753,11 +758,15 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         Draw.panel(ctx, x: x, y: py, w: pw, h: ph, accent: accent)
         Draw.text(ctx, "SKADI", x: x + 20, y: py + 14,
                   font: Fonts.system(24, weight: .bold), color: accent)
-        let status = busy ? "作战中" : "驻扎"
+        let status: String
+        let statusColor: CGColor
+        if busy { status = "作战中"; statusColor = Color.green }
+        else if audioPlaying { status = "♪ 随乐"; statusColor = accent }
+        else { status = "驻扎"; statusColor = Color.textL }
         let sF = Fonts.system(16, weight: .medium)
         let sW = (status as NSString).size(withAttributes: [.font: sF]).width
         Draw.text(ctx, status, x: Int(CGFloat(x + pw - 20) - sW), y: py + 20,
-                  font: sF, color: busy ? Color.green : Color.textL)
+                  font: sF, color: statusColor)
 
         let now = Date().timeIntervalSince1970
 
@@ -777,24 +786,30 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         prevWaitingIDs = waitingNow
         operatorPrimed = true
 
+        // Priority: event reaction > combat (agents working) > dance (music) > idle.
         let fps = SkadiAsset.fps
         let frames: [CGImage]
+        func pick(_ clips: [[CGImage]], _ period: Double, _ fallback: [CGImage]) -> [CGImage] {
+            let f = clips[Int(now / period) % clips.count]
+            return f.isEmpty ? fallback : f
+        }
         if now < reactionUntil, let rc = reactionClip, !rc.isEmpty {
             frames = rc
+        } else if busy {
+            frames = pick([SkadiAsset.skill2, SkadiAsset.skill3], 7.0, SkadiAsset.skill2)
+        } else if audioPlaying {
+            frames = pick([SkadiAsset.move, SkadiAsset.interact, SkadiAsset.skill2], 4.0, SkadiAsset.move)
         } else {
-            // Behaviour cycle: combat behaviours while working, base behaviours while idle.
-            // Each holds `dwell` seconds, picked statelessly from wall-clock.
-            let dwell = 7.0
-            let combat: [[CGImage]] = [SkadiAsset.skill2, SkadiAsset.skill3]
-            let base: [[CGImage]] = [SkadiAsset.relax, SkadiAsset.relax, SkadiAsset.interact,
-                                     SkadiAsset.move, SkadiAsset.relax, SkadiAsset.sleep]
-            let clips = busy ? combat : base
-            var f = clips[Int(now / dwell) % clips.count]
-            if f.isEmpty { f = busy ? SkadiAsset.skill2 : SkadiAsset.relax }
-            frames = f
+            frames = pick([SkadiAsset.relax, SkadiAsset.relax, SkadiAsset.interact,
+                           SkadiAsset.move, SkadiAsset.relax, SkadiAsset.sleep], 7.0, SkadiAsset.relax)
         }
         guard !frames.isEmpty else { return }
         let img = frames[Int(now * fps) % frames.count]
+
+        // Foot-level spectrum while audio plays (drawn under the sprite).
+        if audioPlaying {
+            drawEqualizer(ctx, x: x + 14, baseY: py + ph - 12, w: pw - 28, t: now)
+        }
 
         // Fit into the panel body, feet near the bottom.
         let bodyTop = py + 48
@@ -807,6 +822,28 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let dx = CGFloat(x) + (CGFloat(pw) - dw) / 2
         let dy = CGFloat(bodyTop) + (CGFloat(bodyH) - dh)
         drawImageUpright(ctx, img, in: CGRect(x: dx, y: dy, width: dw, height: dh))
+    }
+
+    /// Decorative foot-level spectrum — synthesized bars (no audio tap), shown while
+    /// the system is playing sound. Heights are a small sum of sines per bar.
+    private func drawEqualizer(_ ctx: CGContext, x: Int, baseY: Int, w: Int, t: Double) {
+        let bars = 15
+        let gapW = 3
+        let bw = (w - gapW * (bars - 1)) / bars
+        guard bw > 0 else { return }
+        let maxH: CGFloat = 42
+        for i in 0..<bars {
+            let p = Double(i)
+            let v = abs(sin(t * 6.0 + p * 0.7)) * 0.6 + abs(sin(t * 3.3 + p * 1.9)) * 0.4
+            let h = max(3, CGFloat(v) * maxH)
+            let bx = CGFloat(x + i * (bw + gapW))
+            let rect = CGRect(x: bx, y: CGFloat(baseY) - h, width: CGFloat(bw), height: h)
+            let peak = v > 0.66
+            let c = (peak ? Color.cyan : Color.green).copy(alpha: 0.8) ?? Color.cyan
+            let path = CGPath(roundedRect: rect, cornerWidth: CGFloat(bw) / 2,
+                              cornerHeight: CGFloat(bw) / 2, transform: nil)
+            ctx.setFillColor(c); ctx.addPath(path); ctx.fillPath()
+        }
     }
 
     /// A session is "urgent" (pinned to the top, flashing red) only when it finished
