@@ -893,6 +893,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             idx = mode > 0 ? min(mode - 1, count - 1) : Int(now / 45) % count
             let room = RoomAsset.images[idx]
             // Aspect-fill the whole canvas (overflow is cropped at the edges).
+            ctx.interpolationQuality = .high
             let scale = max(fw / CGFloat(room.width), fh / CGFloat(room.height))
             let sw = CGFloat(room.width) * scale, sh = CGFloat(room.height) * scale
             drawImageUpright(ctx, room, in: CGRect(x: (fw - sw) / 2, y: (fh - sh) / 2,
