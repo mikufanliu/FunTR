@@ -90,7 +90,8 @@ final class AgentUsageCollector: @unchecked Sendable {
     // Control-tower list scope: a session is listed if it was active within this
     // window, capped per CLI so a busy history can't flood the list.
     private let liveWindow: TimeInterval = 6 * 3600
-    private let maxEntriesPerKind = 6
+    private let activeWindow: TimeInterval = 20 * 60   // concurrent sessions in one project
+    private let maxEntriesPerKind = 8
 
     // Last-known Codex quota (account-global). The full rate-limit block appears only
     // occasionally and the newest reading may be in a different file than the active
@@ -179,14 +180,14 @@ final class AgentUsageCollector: @unchecked Sendable {
 
         let todayStart = Calendar.current.startOfDay(for: Date())
         let now = Date()
-        // One candidate per project dir: its most-recently-modified session file.
-        // (Continued/forked sessions land in the same dir; the newest one wins,
-        // which sidesteps the fork-duplication problem.)
-        var candidates: [(fallbackName: String, path: String, mtime: Date)] = []
+        // Each recently-appended session file is its own card: concurrent sessions in
+        // the SAME project (multiple Claude windows in one repo) all show, instead of
+        // collapsing to one. An idle project falls back to just its newest file.
+        var candidates: [(fallbackName: String, path: String, stem: String, mtime: Date)] = []
 
         for projDir in (try? fm.contentsOfDirectory(atPath: root)) ?? [] {
             let dirPath = root + "/" + projDir
-            var best: (path: String, mtime: Date)?
+            var dirFiles: [(path: String, stem: String, mtime: Date)] = []
             for file in (try? fm.contentsOfDirectory(atPath: dirPath)) ?? [] {
                 guard file.hasSuffix(".jsonl") else { continue }
                 let path = dirPath + "/" + file
@@ -202,24 +203,34 @@ final class AgentUsageCollector: @unchecked Sendable {
                         self.accumulateClaudeLine(line)
                     }
                 }
-                if best == nil || mtime > best!.mtime { best = (path, mtime) }
+                if now.timeIntervalSince(mtime) <= liveWindow {
+                    dirFiles.append((path, String(file.dropLast(6)), mtime))
+                }
             }
-            if let b = best, now.timeIntervalSince(b.mtime) <= liveWindow {
-                candidates.append((projDir, b.path, b.mtime))
-            }
+            guard !dirFiles.isEmpty else { continue }
+            dirFiles.sort { $0.mtime > $1.mtime }
+            // Files touched within activeWindow are concurrently live → each its own
+            // card; if none are, show a single idle representative (the newest).
+            let active = dirFiles.filter { now.timeIntervalSince($0.mtime) < activeWindow }
+            let chosen = active.isEmpty ? [dirFiles[0]] : Array(active.prefix(4))
+            for f in chosen { candidates.append((projDir, f.path, f.stem, f.mtime)) }
         }
 
         candidates.sort { $0.mtime > $1.mtime }
         var entries: [AgentEntry] = []
+        var projSeen: [String: Int] = [:]
         for c in candidates.prefix(maxEntriesPerKind) {
             let ago = max(0, Int(now.timeIntervalSince(c.mtime)))
             let (proj, message, rawWaiting, step) = claudeActivity(path: c.path)
-            let name = proj ?? c.fallbackName
-            let id = "claude:" + name
+            let base = proj ?? c.fallbackName
+            let n = (projSeen[base] ?? 0) + 1
+            projSeen[base] = n
+            let display = n > 1 ? "\(base) #\(n)" : base
+            let id = "claude:" + c.stem            // unique & stable per session file
             let (waiting, flash) = attentionState(id: id, rawWaiting: rawWaiting, ago: ago)
             let working = !rawWaiting && ago < 90
             entries.append(AgentEntry(
-                kind: .claude, id: id, project: name, message: message,
+                kind: .claude, id: id, project: display, message: message,
                 secondsSinceActive: ago, waiting: waiting, flash: flash, isWorking: working,
                 stepCurrent: step?.current, stepTotal: step?.total, stepText: step?.text))
         }
