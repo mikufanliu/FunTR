@@ -34,6 +34,19 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     private var reactionUntil: TimeInterval = 0
     private var operatorPrimed = false  // skip reactions on the very first frame
     private var _audioPlaying = false   // system is outputting sound → dance + spectrum
+    private var _screensaver = false    // screen locked → show the ambient saver
+    // Drifting stars for the screensaver (generated once).
+    private lazy var stars: [(x: CGFloat, y: CGFloat, r: CGFloat, ph: Double)] = (0..<64).map { _ in
+        (CGFloat.random(in: 0...CGFloat(Layout.width)),
+         CGFloat.random(in: 0...CGFloat(Layout.height)),
+         CGFloat.random(in: 0.6...1.9),
+         Double.random(in: 0...6.283))
+    }
+
+    /// Toggle the screen-lock ambient screensaver (called from the lock notifications).
+    func setScreensaver(_ on: Bool) {
+        lock.lock(); _screensaver = on; lock.unlock()
+    }
 
     // Reusable CGContext — avoids allocating 3.6MB every 0.5s (prevents CG raster data leak)
     private var reusableCtx: CGContext?
@@ -221,6 +234,10 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         else { return nil }
         ctx.translateBy(x: 0, y: CGFloat(h)); ctx.scaleBy(x: 1, y: -1)
         Draw.gradientBackground(ctx)
+        if CommandLine.arguments.contains("--saver") {
+            renderScreensaver(ctx)
+            return ctx.makeImage()
+        }
         renderOperator(ctx, agents: agents, audioPlaying: true)
         renderAgents(ctx, agents: agents)
         renderInfoPanel(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys,
@@ -282,10 +299,14 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         // Background
         Draw.gradientBackground(ctx)
 
-        // Panels
-        renderOperator(ctx, agents: agents, audioPlaying: audioPlaying)
-        renderAgents(ctx, agents: agents)
-        renderInfoPanel(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys, net: net)
+        lock.lock(); let saver = _screensaver; lock.unlock()
+        if saver {
+            renderScreensaver(ctx)
+        } else {
+            renderOperator(ctx, agents: agents, audioPlaying: audioPlaying)
+            renderAgents(ctx, agents: agents)
+            renderInfoPanel(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys, net: net)
+        }
 
         let image = ctx.makeImage()
         ctx.restoreGState()
@@ -848,6 +869,45 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             let path = CGPath(roundedRect: rect, cornerWidth: CGFloat(bw) / 2,
                               cornerHeight: CGFloat(bw) / 2, transform: nil)
             ctx.setFillColor(c); ctx.addPath(path); ctx.fillPath()
+        }
+    }
+
+    // MARK: - Screensaver (shown while the screen is locked)
+
+    /// Full-canvas ambient saver: drifting stars, a big idle Skadi on the left, and a
+    /// giant clock + date + lunar on the right. Runs off the normal frame loop.
+    private func renderScreensaver(_ ctx: CGContext) {
+        let w = Layout.width, h = Layout.height
+        let now = Date().timeIntervalSince1970
+        drawStars(ctx, now)
+
+        let frames = SkadiAsset.relax
+        if !frames.isEmpty {
+            let img = frames[Int(now * SkadiAsset.fps) % frames.count]
+            let ih = CGFloat(h) * 0.86
+            let iw = ih * CGFloat(img.width) / CGFloat(img.height)
+            let ix = CGFloat(w) * 0.14 - iw / 2
+            let iy = CGFloat(h) - ih - 14
+            drawImageUpright(ctx, img, in: CGRect(x: ix, y: iy, width: iw, height: ih))
+        }
+
+        let cxr = Int(CGFloat(w) * 0.60)
+        let df = DateFormatter(); df.dateFormat = "HH:mm"
+        Draw.centeredText(ctx, df.string(from: Date()), cx: cxr, y: Int(CGFloat(h) * 0.15),
+                          font: Fonts.system(200, weight: .thin), color: Color.textW)
+        let zh = DateFormatter(); zh.locale = Locale(identifier: "zh_CN")
+        zh.dateFormat = "EEEE  M月d日"
+        Draw.centeredText(ctx, zh.string(from: Date()), cx: cxr, y: Int(CGFloat(h) * 0.74),
+                          font: Fonts.system(34, weight: .medium), color: Color.textS)
+        Draw.centeredText(ctx, lunarString(Date()), cx: cxr, y: Int(CGFloat(h) * 0.74) + 46,
+                          font: Fonts.system(28), color: Color.orange)
+    }
+
+    private func drawStars(_ ctx: CGContext, _ now: Double) {
+        for s in stars {
+            let a = 0.22 + 0.35 * (0.5 + 0.5 * sin(now * 0.7 + s.ph))
+            ctx.setFillColor(Color.textW.copy(alpha: CGFloat(a)) ?? Color.textW)
+            ctx.fillEllipse(in: CGRect(x: s.x - s.r, y: s.y - s.r, width: s.r * 2, height: s.r * 2))
         }
     }
 

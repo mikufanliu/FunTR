@@ -96,6 +96,11 @@ final class AppState {
     func currentFrame() -> CGImage? {
         engine?.currentFrame()
     }
+
+    /// Screen lock/unlock → toggle the ambient screensaver on the LCD.
+    func setScreensaver(_ on: Bool) {
+        engine?.setScreensaver(on)
+    }
 }
 
 // MARK: - Engine Status
@@ -169,6 +174,10 @@ final class DisplayEngine: @unchecked Sendable {
     /// is disconnected). Thread-safe: render() serializes internally.
     func currentFrame() -> CGImage? {
         monitorRenderer.render()
+    }
+
+    func setScreensaver(_ on: Bool) {
+        monitorRenderer.setScreensaver(on)
     }
 
     func updateSettings(set: DisplaySet, brightness: Int, interval: Double, rotate: Bool) {

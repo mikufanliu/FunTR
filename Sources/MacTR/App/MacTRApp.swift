@@ -196,6 +196,15 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
         // Start engine
         appState.start()
 
+        // Screen lock/unlock → ambient screensaver on the LCD.
+        let dnc = DistributedNotificationCenter.default()
+        dnc.addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) {
+            [weak self] _ in self?.appState.setScreensaver(true)
+        }
+        dnc.addObserver(forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: .main) {
+            [weak self] _ in self?.appState.setScreensaver(false)
+        }
+
         // No LCD after the initial connect attempt → fall back to on-Mac preview.
         // Delayed so a present device can connect first without a window flash.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
