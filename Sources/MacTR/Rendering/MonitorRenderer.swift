@@ -880,8 +880,8 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
 
     // MARK: - Screensaver (shown while the screen is locked)
 
-    /// Full-canvas ambient saver: a real PRTS base room filling the whole screen
-    /// (selected or auto-rotating), Skadi pacing the floor, and a clock card overlaid.
+    /// Full-canvas ambient saver: a high-quality wallpaper filling the screen
+    /// (selected or auto-rotating), with a clock card overlaid.
     private func renderScreensaver(_ ctx: CGContext) {
         let fw = CGFloat(Layout.width), fh = CGFloat(Layout.height)
         let now = Date().timeIntervalSince1970
@@ -891,41 +891,23 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         var idx = 0
         if count > 0 {
             idx = mode > 0 ? min(mode - 1, count - 1) : Int(now / 45) % count
-            let room = RoomAsset.images[idx]
-            // Aspect-fill the whole canvas (overflow is cropped at the edges).
+            let wp = RoomAsset.images[idx]
+            // Aspect-fill the whole canvas (wallpapers are pre-cropped to 1920x480).
             ctx.interpolationQuality = .high
-            let scale = max(fw / CGFloat(room.width), fh / CGFloat(room.height))
-            let sw = CGFloat(room.width) * scale, sh = CGFloat(room.height) * scale
-            drawImageUpright(ctx, room, in: CGRect(x: (fw - sw) / 2, y: (fh - sh) / 2,
-                                                   width: sw, height: sh))
+            let scale = max(fw / CGFloat(wp.width), fh / CGFloat(wp.height))
+            let sw = CGFloat(wp.width) * scale, sh = CGFloat(wp.height) * scale
+            drawImageUpright(ctx, wp, in: CGRect(x: (fw - sw) / 2, y: (fh - sh) / 2,
+                                                 width: sw, height: sh))
         } else {
             drawStars(ctx, now)
         }
 
-        // Skadi paces the floor — triangle-wave travel, facing her direction of travel.
-        let frames = SkadiAsset.move.isEmpty ? SkadiAsset.relax : SkadiAsset.move
-        if !frames.isEmpty {
-            let img = frames[Int(now * SkadiAsset.fps) % frames.count]
-            let ih = fh * 0.58
-            let iw = ih * CGFloat(img.width) / CGFloat(img.height)
-            let period = 18.0
-            let phase = now.truncatingRemainder(dividingBy: period) / period
-            let tri = phase < 0.5 ? phase * 2 : (1 - phase) * 2
-            let left = fw * 0.05, right = fw * 0.72 - iw
-            let sx = left + (right - left) * CGFloat(tri)
-            let feetY = fh - 8
-            ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.3))
-            ctx.fillEllipse(in: CGRect(x: sx + iw * 0.15, y: feetY - 8, width: iw * 0.7, height: 14))
-            drawImageUpright(ctx, img, in: CGRect(x: sx, y: feetY - ih, width: iw, height: ih),
-                             flipX: phase >= 0.5)
-        }
-
-        // Clock card, overlaid top-right on a soft scrim so it reads over any room.
+        // Clock card, overlaid top-right on a soft scrim so it reads over any wallpaper.
         let boxW: CGFloat = 540, boxX = fw - boxW - 36, boxY: CGFloat = 40
         let boxH = fh - 80
         let scrim = CGPath(roundedRect: CGRect(x: boxX, y: boxY, width: boxW, height: boxH),
                            cornerWidth: 22, cornerHeight: 22, transform: nil)
-        ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.34))
+        ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.38))
         ctx.addPath(scrim); ctx.fillPath()
         let cxr = Int(boxX + boxW / 2)
         let df = DateFormatter(); df.dateFormat = "HH:mm"
@@ -937,10 +919,6 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
                           font: Fonts.system(28, weight: .medium), color: Color.textS)
         Draw.centeredText(ctx, lunarString(Date()), cx: cxr, y: Int(fh * 0.60) + 40,
                           font: Fonts.system(24), color: Color.orange)
-        if count > 0, idx < RoomAsset.names.count {
-            Draw.centeredText(ctx, RoomAsset.names[idx], cx: cxr, y: Int(fh * 0.60) + 78,
-                              font: Fonts.system(17), color: Color.textL)
-        }
     }
 
     private func drawStars(_ ctx: CGContext, _ now: Double) {
