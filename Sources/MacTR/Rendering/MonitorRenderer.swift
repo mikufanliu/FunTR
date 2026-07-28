@@ -12,6 +12,8 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
 
     private let collector = SystemMetricsCollector()
     private let agentCollector = AgentUsageCollector()
+    // "Dynamic Island" push channel — agents/scripts drop a message onto the LCD.
+    private let pinService = PinService()
 
     // Background metrics collection — decoupled from frame loop for consistent refresh
     private let metricsQueue = DispatchQueue(label: "com.thermalvision.metrics")
@@ -47,6 +49,13 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     /// Toggle the screen-lock ambient screensaver (called from the lock notifications).
     func setScreensaver(_ on: Bool) {
         lock.lock(); _screensaver = on; lock.unlock()
+    }
+
+    /// Whether the saver is currently showing — the frame loop skips the brightness
+    /// boost for it (wallpapers are already exposed; boosting blows them out).
+    func isScreensaverActive() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _screensaver
     }
 
     /// Screensaver room: 0 = auto-rotate, else 1-based room index.
@@ -124,6 +133,8 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     /// only while something is actually moving, and idle low otherwise.
     func wantsHighFrameRate() -> Bool {
         lock.lock(); defer { lock.unlock() }
+        // A pin is sliding in/out or counting down → animate smoothly.
+        if pinService.current() != nil { return true }
         // Heavy CPU → Pikachu crackles with electricity, worth animating smoothly
         if let c = _cpu, c.total > 55 { return true }
         guard let a = _agents else { return false }
@@ -139,6 +150,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             let mem = collector.collectMemory()
             let net = collector.collectNetwork()
             let audio = AudioService.isPlaying()
+            pinService.refresh()
             lock.lock()
             _cpu = cpu; _mem = mem; _net = net; _audioPlaying = audio
             lock.unlock()
@@ -312,6 +324,11 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             renderOperator(ctx, agents: agents, audioPlaying: audioPlaying)
             renderAgents(ctx, agents: agents)
             renderInfoPanel(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys, net: net)
+        }
+
+        // Dynamic-Island push overlay — drawn last so it floats over anything.
+        if let pin = pinService.current() {
+            renderPinIsland(ctx, pin: pin)
         }
 
         let image = ctx.makeImage()
@@ -927,6 +944,127 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             ctx.setFillColor(Color.textW.copy(alpha: CGFloat(a)) ?? Color.textW)
             ctx.fillEllipse(in: CGRect(x: s.x - s.r, y: s.y - s.r, width: s.r * 2, height: s.r * 2))
         }
+    }
+
+    // MARK: - Dynamic-Island push overlay
+
+    /// Draw the active push message as an animated card over the current screen.
+    /// Floating banner by default (centered near the top); `big` takes the whole
+    /// screen with the dashboard dimmed behind. Supports an emoji icon, a projected
+    /// image, and a markdown body (reusing the agent-message layout).
+    private func renderPinIsland(_ ctx: CGContext, pin: PinMessage) {
+        let now = Date()
+        let t = now.timeIntervalSince(pin.createdAt)
+        let remaining = pin.expiresAt.timeIntervalSince(now)
+        let total = pin.expiresAt.timeIntervalSince(pin.createdAt)
+        // Ease in then out → alpha 0…1…0 over the message lifetime.
+        func easeOut(_ x: Double) -> Double { 1 - pow(1 - min(1, max(0, x)), 3) }
+        let appear = easeOut(t / 0.35) * easeOut(remaining / 0.4)
+        guard appear > 0.01 else { return }
+
+        let fw = CGFloat(Layout.width), fh = CGFloat(Layout.height)
+        ctx.saveGState()
+        ctx.setAlpha(CGFloat(appear))          // fades the whole island as one unit
+
+        // Card geometry
+        let cardX: CGFloat, cardY: CGFloat, cardW: CGFloat, cardH: CGFloat
+        if pin.big {
+            // Dim the dashboard behind, then a near-full-screen card.
+            ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.62))
+            ctx.fill(CGRect(x: 0, y: 0, width: fw, height: fh))
+            (cardX, cardY, cardW, cardH) = (48, 30, fw - 96, fh - 60)
+        } else {
+            cardW = 1180; cardH = 232
+            cardX = (fw - cardW) / 2
+            cardY = 36 - CGFloat(1 - appear) * 16   // slides down from the top edge
+        }
+
+        // Card: rounded fill + accent border + a thin accent header strip.
+        let card = CGRect(x: cardX, y: cardY, width: cardW, height: cardH)
+        let cardPath = CGPath(roundedRect: card, cornerWidth: 26, cornerHeight: 26, transform: nil)
+        ctx.setShadow(offset: .zero, blur: 26,
+                      color: CGColor(red: 0, green: 0, blue: 0, alpha: 0.55))
+        ctx.setFillColor(CGColor(red: 22/255, green: 25/255, blue: 36/255, alpha: 0.98))
+        ctx.addPath(cardPath); ctx.fillPath()
+        ctx.setShadow(offset: .zero, blur: 0, color: nil)
+        ctx.setStrokeColor(pin.accent.copy(alpha: 0.85) ?? pin.accent)
+        ctx.setLineWidth(2); ctx.addPath(cardPath); ctx.strokePath()
+
+        let pad: CGFloat = pin.big ? 40 : 26
+        var contentX = cardX + pad
+        let contentR = cardX + cardW - pad
+        let midY = cardY + cardH / 2
+
+        // ── Projected image: right side (big) or right thumbnail (float) ──
+        var imageLeftEdge = contentR
+        if let img = pin.image {
+            let maxW: CGFloat = pin.big ? min(760, cardW * 0.44) : 300
+            let boxH = cardH - 2 * pad
+            let aspect = CGFloat(img.width) / CGFloat(img.height)
+            var dh = boxH, dw = boxH * aspect
+            if dw > maxW { dw = maxW; dh = dw / aspect }
+            let ix = contentR - dw
+            let iy = midY - dh / 2
+            // rounded clip so the picture matches the card's corners
+            ctx.saveGState()
+            let ip = CGPath(roundedRect: CGRect(x: ix, y: iy, width: dw, height: dh),
+                            cornerWidth: 14, cornerHeight: 14, transform: nil)
+            ctx.addPath(ip); ctx.clip()
+            drawImageUpright(ctx, img, in: CGRect(x: ix, y: iy, width: dw, height: dh))
+            ctx.restoreGState()
+            imageLeftEdge = ix - 22
+        }
+
+        // ── Icon chip: left, vertically centered ──
+        if let emoji = pin.iconEmoji {
+            let sz: CGFloat = pin.big ? 128 : 92
+            let chip = CGRect(x: contentX, y: midY - sz / 2, width: sz, height: sz)
+            let chipP = CGPath(roundedRect: chip, cornerWidth: 22, cornerHeight: 22, transform: nil)
+            ctx.setFillColor(pin.accent.copy(alpha: 0.16) ?? pin.accent)
+            ctx.addPath(chipP); ctx.fillPath()
+            let ef = Fonts.system(sz * 0.62)
+            Draw.centeredText(ctx, emoji, cx: Int(chip.midX), y: Int(chip.midY - sz * 0.42),
+                              font: ef, color: Color.textW)
+            contentX = chip.maxX + 24
+        }
+
+        // ── Text column: source tag → title → markdown body ──
+        let textR = imageLeftEdge
+        let textW = Int(textR - contentX)
+        var ty = Int(cardY + pad)
+        if textW > 40 {
+            if let src = pin.source {
+                let sF = Fonts.system(pin.big ? 18 : 16, weight: .semibold)
+                Draw.text(ctx, truncate(src.uppercased(), font: sF, maxW: CGFloat(textW)),
+                          x: Int(contentX), y: ty, font: sF, color: pin.accent)
+                ty += pin.big ? 30 : 26
+            }
+            if let title = pin.title {
+                let tF = Fonts.system(pin.big ? 46 : 34, weight: .bold)
+                Draw.text(ctx, truncate(title, font: tF, maxW: CGFloat(textW)),
+                          x: Int(contentX), y: ty, font: tF, color: Color.textW)
+                ty += pin.big ? 60 : 46
+            }
+            let bodyBottom = Int(cardY + cardH - pad - 10)
+            if let body = pin.body, ty < bodyBottom {
+                renderMessage(ctx, text: body, x: Int(contentX), y: ty,
+                              w: textW, bottom: bodyBottom, accent: pin.accent)
+            }
+        }
+
+        // ── Countdown hairline along the bottom inner edge ──
+        let frac = total > 0 ? CGFloat(max(0, remaining / total)) : 0
+        let barY = cardY + cardH - pad + 2
+        let barW = (cardW - 2 * pad) * frac
+        if barW > 1 {
+            ctx.setStrokeColor(pin.accent)
+            ctx.setLineWidth(3); ctx.setLineCap(.round)
+            ctx.move(to: CGPoint(x: contentX, y: barY))
+            ctx.addLine(to: CGPoint(x: contentX + barW, y: barY))
+            ctx.strokePath()
+        }
+
+        ctx.restoreGState()
     }
 
     /// A session is "urgent" (pinned to the top, flashing red) only when it finished

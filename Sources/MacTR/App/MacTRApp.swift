@@ -26,6 +26,22 @@ struct MacTREntry {
             return
         }
 
+        // Push a "Dynamic Island" message onto a running instance's LCD, then exit.
+        // Usage: MacTR --pin '{"title":"完成","body":"...","icon":"✅","secs":12}'
+        //        MacTR --pin-clear
+        if CommandLine.arguments.contains("--pin-clear") {
+            _ = PinService.write(json: #"{"clear":true}"#)
+            print("[Pin] cleared")
+            return
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--pin") {
+            let json = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : ""
+            guard !json.isEmpty else { print("[Pin] usage: --pin '<json>'"); return }
+            let ok = PinService.write(json: json)
+            print(ok ? "[Pin] queued → \(PinService.pinPath)" : "[Pin][ERROR] write failed")
+            return
+        }
+
         // Benchmark mode: measure achievable frame rate on the real LCD.
         if CommandLine.arguments.contains("--benchmark") {
             runBenchmark()

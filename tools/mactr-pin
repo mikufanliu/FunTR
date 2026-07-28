@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# mactr-pin — project a "Dynamic Island" message onto the Thermalright LCD.
+#
+# Writes ~/.mactr/pin.json, which a running MacTR watches and overlays as an
+# animated card (title + markdown body + emoji icon + optional image), then
+# auto-dismisses after `secs`.
+#
+# Examples:
+#   mactr-pin "构建通过 ✓" "**42/42** 测试通过"
+#   mactr-pin --icon 🚀 --source "Claude Code" --title "已部署" --body "生产环境已上线" --secs 15
+#   mactr-pin --big --image ~/shot.png --title "结果图"
+#   echo '{"title":"hi","body":"world"}' | mactr-pin --json -
+#   mactr-pin --clear
+#
+# Positional shorthand: `mactr-pin TITLE [BODY]`.
+
+set -euo pipefail
+OUT="$HOME/.mactr/pin.json"
+mkdir -p "$HOME/.mactr"
+
+if [[ "${1:-}" == "--clear" ]]; then
+  printf '{"clear":true}' > "$OUT"; echo "cleared"; exit 0
+fi
+
+if [[ "${1:-}" == "--json" ]]; then
+  if [[ "${2:-}" == "-" ]]; then cat > "$OUT"; else printf '%s' "${2:-}" > "$OUT"; fi
+  echo "queued → $OUT"; exit 0
+fi
+
+TITLE="" BODY="" ICON="" IMAGE="" SOURCE="" ACCENT="" SECS="" BIG="false"
+POS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --title)  TITLE="$2"; shift 2;;
+    --body)   BODY="$2"; shift 2;;
+    --icon)   ICON="$2"; shift 2;;
+    --image)  IMAGE="$2"; shift 2;;
+    --source) SOURCE="$2"; shift 2;;
+    --accent) ACCENT="$2"; shift 2;;
+    --secs)   SECS="$2"; shift 2;;
+    --big)    BIG="true"; shift;;
+    *)        POS+=("$1"); shift;;
+  esac
+done
+# Positional TITLE [BODY]
+[[ -z "$TITLE" && ${#POS[@]} -ge 1 ]] && TITLE="${POS[0]}"
+[[ -z "$BODY"  && ${#POS[@]} -ge 2 ]] && BODY="${POS[1]}"
+# Expand ~ in image path
+[[ -n "$IMAGE" ]] && IMAGE="${IMAGE/#\~/$HOME}"
+
+TITLE="$TITLE" BODY="$BODY" ICON="$ICON" IMAGE="$IMAGE" SOURCE="$SOURCE" \
+ACCENT="$ACCENT" SECS="$SECS" BIG="$BIG" python3 - "$OUT" <<'PY'
+import json, os, sys
+d = {}
+def put(k, v):
+    if v: d[k] = v
+put("title", os.environ.get("TITLE"))
+put("body",  os.environ.get("BODY"))
+put("icon",  os.environ.get("ICON"))
+put("image", os.environ.get("IMAGE"))
+put("source",os.environ.get("SOURCE"))
+put("accent",os.environ.get("ACCENT"))
+if os.environ.get("SECS"): d["secs"] = float(os.environ["SECS"])
+if os.environ.get("BIG") == "true": d["big"] = True
+open(sys.argv[1], "w").write(json.dumps(d, ensure_ascii=False))
+print("queued →", sys.argv[1])
+PY

@@ -273,7 +273,10 @@ final class DisplayEngine: @unchecked Sendable {
             // Without this, Core Graphics caches hundreds of 3.6MB images → GB leak
             autoreleasepool {
                 let set = currentSet
-                let bright = brightness
+                // Wallpapers are already exposed; the brightness boost is for the dark
+                // dashboard only. Boosting a photo blows the whites out, so the saver
+                // sends at level 1 (no multiply).
+                let bright = monitorRenderer.isScreensaverActive() ? 1 : brightness
                 let rotate = rotateDisplay
 
                 let jpeg: Data?

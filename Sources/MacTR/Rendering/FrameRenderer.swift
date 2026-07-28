@@ -94,21 +94,22 @@ enum JPEGEncoder {
     // Reusable CIContext for brightness filter
     nonisolated(unsafe) private static var ciCtx: CIContext?
 
-    /// Brighten via a gamma curve (not a linear multiply): a multiply by ~2.2x at
-    /// level 5 clips everything above ~45% grey to pure white, which washes out bright
-    /// content like wallpapers. Gamma lifts the shadows/midtones while leaving white at
-    /// white, so photos stay intact and the dark dashboard still brightens.
+    /// Apply brightness using CIFilter — matches Python ImageEnhance.Brightness behavior.
+    /// PIL Brightness multiplies RGB values by factor. Good for the dark dashboard; the
+    /// screensaver skips this (passes brightness 1) since wallpapers are already exposed.
     private static func applyBrightness(_ image: CGImage, level: Int) -> CGImage? {
         let factor = Brightness.factor(for: level)
         if factor <= 1.0 { return image }
 
         let ciImage = CIImage(cgImage: image)
-        // power < 1 brightens; derive from the existing factor, clamped so it never
-        // gets extreme.
-        let power = max(0.4, 1.0 / factor)
-        guard let filter = CIFilter(name: "CIGammaAdjust") else { return nil }
+        guard let filter = CIFilter(name: "CIColorMatrix") else { return nil }
         filter.setValue(ciImage, forKey: kCIInputImageKey)
-        filter.setValue(Float(power), forKey: "inputPower")
+        let f = Float(factor)
+        filter.setValue(CIVector(x: CGFloat(f), y: 0, z: 0, w: 0), forKey: "inputRVector")
+        filter.setValue(CIVector(x: 0, y: CGFloat(f), z: 0, w: 0), forKey: "inputGVector")
+        filter.setValue(CIVector(x: 0, y: 0, z: CGFloat(f), w: 0), forKey: "inputBVector")
+        filter.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
+        filter.setValue(CIVector(x: 0, y: 0, z: 0, w: 0), forKey: "inputBiasVector")
 
         guard let output = filter.outputImage else { return nil }
         if ciCtx == nil { ciCtx = CIContext() }
