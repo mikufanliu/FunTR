@@ -41,6 +41,13 @@ final class AppState {
     var screensaverEnabled: Bool = UserDefaults.standard.object(forKey: "screensaverEnabled") as? Bool ?? true {
         didSet { UserDefaults.standard.set(screensaverEnabled, forKey: "screensaverEnabled") }
     }
+    // Screensaver room: 0 = auto-rotate, else 1-based room index (persisted).
+    var screensaverRoomMode: Int = UserDefaults.standard.integer(forKey: "screensaverRoomMode") {
+        didSet {
+            UserDefaults.standard.set(screensaverRoomMode, forKey: "screensaverRoomMode")
+            engine?.setSaverRoomMode(screensaverRoomMode)
+        }
+    }
 
     // Metrics (for menu bar display)
     var frameCount = 0
@@ -72,6 +79,7 @@ final class AppState {
         }
         engine = eng
         eng.start(set: currentSet, brightness: brightness, interval: refreshInterval, rotate: rotateDisplay)
+        eng.setSaverRoomMode(screensaverRoomMode)
     }
 
     func stop() {
@@ -183,6 +191,10 @@ final class DisplayEngine: @unchecked Sendable {
 
     func setScreensaver(_ on: Bool) {
         monitorRenderer.setScreensaver(on)
+    }
+
+    func setSaverRoomMode(_ m: Int) {
+        monitorRenderer.setSaverRoomMode(m)
     }
 
     func updateSettings(set: DisplaySet, brightness: Int, interval: Double, rotate: Bool) {

@@ -103,6 +103,13 @@ struct SettingsView: View {
 
             Section("Screensaver") {
                 Toggle("锁屏时显示屏保", isOn: $state.screensaverEnabled)
+                Picker("房间", selection: $state.screensaverRoomMode) {
+                    Text("自动轮换").tag(0)
+                    ForEach(Array(RoomAsset.names.enumerated()), id: \.offset) { i, name in
+                        Text(name).tag(i + 1)
+                    }
+                }
+                .disabled(!state.screensaverEnabled)
                 Text("屏幕锁定后，LCD 切换为基建房间 + 时钟的待机画面")
                     .font(.caption)
                     .foregroundStyle(.secondary)

@@ -35,6 +35,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     private var operatorPrimed = false  // skip reactions on the very first frame
     private var _audioPlaying = false   // system is outputting sound → dance + spectrum
     private var _screensaver = false    // screen locked → show the ambient saver
+    private var _saverRoomMode = 0      // 0 = auto-rotate, else 1-based room index
     // Drifting stars for the screensaver (generated once).
     private lazy var stars: [(x: CGFloat, y: CGFloat, r: CGFloat, ph: Double)] = (0..<64).map { _ in
         (CGFloat.random(in: 0...CGFloat(Layout.width)),
@@ -46,6 +47,11 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     /// Toggle the screen-lock ambient screensaver (called from the lock notifications).
     func setScreensaver(_ on: Bool) {
         lock.lock(); _screensaver = on; lock.unlock()
+    }
+
+    /// Screensaver room: 0 = auto-rotate, else 1-based room index.
+    func setSaverRoomMode(_ m: Int) {
+        lock.lock(); _saverRoomMode = m; lock.unlock()
     }
 
     // Reusable CGContext — avoids allocating 3.6MB every 0.5s (prevents CG raster data leak)
@@ -874,18 +880,25 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
 
     // MARK: - Screensaver (shown while the screen is locked)
 
-    /// Full-canvas ambient saver: a real PRTS base room (天镜阁会客堂) as the backdrop,
-    /// with Skadi pacing its floor and a clock cluster in the space beside it.
+    /// Full-canvas ambient saver: a real PRTS base room as the backdrop (selected or
+    /// auto-rotating), with Skadi pacing its floor and a clock cluster beside it.
     private func renderScreensaver(_ ctx: CGContext) {
-        let w = Layout.width, h = Layout.height
-        let fw = CGFloat(w), fh = CGFloat(h)
+        let fw = CGFloat(Layout.width), fh = CGFloat(Layout.height)
         let now = Date().timeIntervalSince1970
 
-        // Room backdrop, full height, left-anchored.
-        var roomW = fw * 0.42
-        if let room = RoomAsset.receptionHall {
-            roomW = fh * CGFloat(room.width) / CGFloat(room.height)
-            drawImageUpright(ctx, room, in: CGRect(x: 0, y: 0, width: roomW, height: fh))
+        // Pick the room: explicit selection, else rotate every 45s.
+        lock.lock(); let mode = _saverRoomMode; lock.unlock()
+        let count = RoomAsset.count
+        var roomW = fw * 0.6, roomH = fh, roomY: CGFloat = 0
+        var idx = 0
+        if count > 0 {
+            idx = mode > 0 ? min(mode - 1, count - 1) : Int(now / 45) % count
+            let room = RoomAsset.images[idx]
+            let aspect = CGFloat(room.width) / CGFloat(room.height)
+            roomW = min(fh * aspect, fw * 0.66)     // cap width so the clock has room
+            roomH = roomW / aspect
+            roomY = (fh - roomH) / 2
+            drawImageUpright(ctx, room, in: CGRect(x: 0, y: roomY, width: roomW, height: roomH))
         } else {
             drawStars(ctx, now)
         }
@@ -894,31 +907,35 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let frames = SkadiAsset.move.isEmpty ? SkadiAsset.relax : SkadiAsset.move
         if !frames.isEmpty {
             let img = frames[Int(now * SkadiAsset.fps) % frames.count]
-            let ih = fh * 0.42
+            let ih = roomH * 0.5
             let iw = ih * CGFloat(img.width) / CGFloat(img.height)
             let period = 18.0
             let phase = now.truncatingRemainder(dividingBy: period) / period
             let tri = phase < 0.5 ? phase * 2 : (1 - phase) * 2
-            let left = roomW * 0.10, right = roomW * 0.9 - iw
+            let left = roomW * 0.08, right = roomW * 0.88 - iw
             let sx = left + (right - left) * CGFloat(tri)
-            let feetY = fh - fh * 0.05
+            let feetY = roomY + roomH - roomH * 0.05
             ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.3))
             ctx.fillEllipse(in: CGRect(x: sx + iw * 0.15, y: feetY - 8, width: iw * 0.7, height: 14))
             drawImageUpright(ctx, img, in: CGRect(x: sx, y: feetY - ih, width: iw, height: ih),
                              flipX: phase < 0.5)
         }
 
-        // Clock cluster in the space to the right of the room.
+        // Clock cluster + room name in the space beside the room.
         let cxr = Int(roomW + (fw - roomW) / 2)
         let df = DateFormatter(); df.dateFormat = "HH:mm"
         Draw.centeredText(ctx, df.string(from: Date()), cx: cxr, y: Int(fh * 0.15),
-                          font: Fonts.system(150, weight: .thin), color: Color.textW)
+                          font: Fonts.system(140, weight: .thin), color: Color.textW)
         let zh = DateFormatter(); zh.locale = Locale(identifier: "zh_CN")
         zh.dateFormat = "EEEE  M月d日"
-        Draw.centeredText(ctx, zh.string(from: Date()), cx: cxr, y: Int(fh * 0.66),
-                          font: Fonts.system(30, weight: .medium), color: Color.textS)
-        Draw.centeredText(ctx, lunarString(Date()), cx: cxr, y: Int(fh * 0.66) + 42,
-                          font: Fonts.system(26), color: Color.orange)
+        Draw.centeredText(ctx, zh.string(from: Date()), cx: cxr, y: Int(fh * 0.62),
+                          font: Fonts.system(28, weight: .medium), color: Color.textS)
+        Draw.centeredText(ctx, lunarString(Date()), cx: cxr, y: Int(fh * 0.62) + 40,
+                          font: Fonts.system(24), color: Color.orange)
+        if count > 0, idx < RoomAsset.names.count {
+            Draw.centeredText(ctx, RoomAsset.names[idx], cx: cxr, y: Int(fh * 0.62) + 78,
+                              font: Fonts.system(17), color: Color.textL)
+        }
     }
 
     private func drawStars(_ ctx: CGContext, _ now: Double) {
