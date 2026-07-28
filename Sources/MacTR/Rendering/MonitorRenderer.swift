@@ -25,6 +25,8 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     private var _agents: AgentsSnapshot?
     private var _sys: SystemSnapshot?
     private var _net: NetworkSnapshot?
+    // Recent network throughput for the STATUS-panel sparkline (mutated only under renderMutex).
+    private var netHistory: [(rx: Double, tx: Double)] = []
 
     // Reusable CGContext — avoids allocating 3.6MB every 0.5s (prevents CG raster data leak)
     private var reusableCtx: CGContext?
@@ -535,65 +537,108 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let py = Layout.panelY
         let ph = Layout.panelHeight
         let accent = Color.cyan
+        let cx = x + pw / 2
         Draw.panel(ctx, x: x, y: py, w: pw, h: ph, accent: accent)
         Draw.text(ctx, "STATUS", x: x + 20, y: py + 14,
-                  font: Fonts.system(24, weight: .bold), color: accent)
+                  font: Fonts.system(20, weight: .bold), color: accent)
 
-        let cx = x + pw / 2
+        // ── Zone 1: time hero — HH:MM heavy, :SS smaller & accented ──
         let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US")
+        df.dateFormat = "HH:mm"; let hhmm = df.string(from: Date())
+        df.dateFormat = "ss";    let ss = df.string(from: Date())
+        let hhmmF = Fonts.system(76, weight: .medium)
+        let ssF = Fonts.system(30, weight: .semibold)
+        let hhmmW = (hhmm as NSString).size(withAttributes: [.font: hhmmF]).width
+        let ssW = (ss as NSString).size(withAttributes: [.font: ssF]).width
+        let gap: CGFloat = 10
+        let startX = CGFloat(cx) - (hhmmW + gap + ssW) / 2
+        let clockTop = py + 38
+        Draw.text(ctx, hhmm, x: Int(startX), y: clockTop, font: hhmmF, color: Color.textW)
+        Draw.text(ctx, ss, x: Int(startX + hhmmW + gap), y: clockTop + 36, font: ssF, color: accent)
 
-        // Big clock — the headline
-        df.dateFormat = "HH:mm:ss"
-        Draw.centeredText(ctx, df.string(from: Date()), cx: cx, y: py + 66,
-                          font: Fonts.system(72, weight: .medium), color: Color.textW)
-        // Gregorian date + weekday
-        df.dateFormat = "yyyy-MM-dd  EEEE"
-        Draw.centeredText(ctx, df.string(from: Date()), cx: cx, y: py + 152,
-                          font: Fonts.system(20, weight: .semibold), color: Color.textS)
-        // Lunar date (local, no network)
-        Draw.centeredText(ctx, lunarString(Date()), cx: cx, y: py + 182,
-                          font: Fonts.system(19), color: Color.orange)
+        let zh = DateFormatter(); zh.locale = Locale(identifier: "zh_CN")
+        zh.dateFormat = "EEEE  M月d日"
+        Draw.centeredText(ctx, zh.string(from: Date()), cx: cx, y: py + 132,
+                          font: Fonts.system(18, weight: .medium), color: Color.textS)
+        Draw.centeredText(ctx, lunarString(Date()), cx: cx, y: py + 158,
+                          font: Fonts.system(18), color: Color.orange)
 
-        let dy = py + 216
-        Draw.line(ctx, from: CGPoint(x: x + 16, y: dy),
-                  to: CGPoint(x: x + pw - 16, y: dy), color: Color.border)
+        // centered accent hairline as a section motif
+        ctx.setStrokeColor(accent.copy(alpha: 0.5) ?? accent)
+        ctx.setLineWidth(2); ctx.setLineCap(.round)
+        ctx.move(to: CGPoint(x: CGFloat(cx) - 26, y: CGFloat(py + 190)))
+        ctx.addLine(to: CGPoint(x: CGFloat(cx) + 26, y: CGFloat(py + 190)))
+        ctx.strokePath()
 
-        // Network — down / up
-        Draw.text(ctx, "网络", x: x + 20, y: dy + 14, font: Fonts.system(18), color: Color.textL)
-        func netRow(_ arrow: String, _ bps: Double, _ color: CGColor, _ ry: Int) {
-            Draw.text(ctx, arrow, x: x + 22, y: ry, font: Fonts.system(22, weight: .bold), color: color)
-            Draw.text(ctx, rate(bps), x: x + 56, y: ry + 2,
-                      font: Fonts.system(22, weight: .medium), color: Color.textW)
+        // ── Zone 2: network sparkline ──
+        netHistory.append((net?.rxBytesPerSec ?? 0, net?.txBytesPerSec ?? 0))
+        if netHistory.count > 80 { netHistory.removeFirst(netHistory.count - 80) }
+        let plotX = x + 20, plotW = pw - 40
+        Draw.text(ctx, "网络", x: plotX, y: py + 206, font: Fonts.system(16), color: Color.textL)
+        let dStr = "↓ " + Draw.formatBytesPerSec(net?.rxBytesPerSec ?? 0)
+        let uStr = "↑ " + Draw.formatBytesPerSec(net?.txBytesPerSec ?? 0)
+        let vF = Fonts.system(16, weight: .semibold)
+        let uW = (uStr as NSString).size(withAttributes: [.font: vF]).width
+        let dW = (dStr as NSString).size(withAttributes: [.font: vF]).width
+        Draw.text(ctx, uStr, x: Int(CGFloat(plotX + plotW) - uW), y: py + 206, font: vF, color: Color.cyan)
+        Draw.text(ctx, dStr, x: Int(CGFloat(plotX + plotW) - uW - dW - 14), y: py + 206, font: vF, color: Color.green)
+        let maxV = max(1024.0, netHistory.flatMap { [$0.rx, $0.tx] }.max() ?? 1)
+        drawSparkline(ctx, values: netHistory.map { $0.rx }, x: plotX, y: py + 232, w: plotW, h: 60,
+                      maxV: maxV, color: Color.green, fill: true)
+        drawSparkline(ctx, values: netHistory.map { $0.tx }, x: plotX, y: py + 232, w: plotW, h: 60,
+                      maxV: maxV, color: Color.cyan, fill: false)
+
+        // ── Zone 3: system mini rings — CPU / mem / temp ──
+        let ringY = py + 358
+        let rr = 30
+        func ring(_ i: Int, _ label: String, _ pct: Double, _ valStr: String, _ c: CGColor) {
+            let rcx = x + pw * (2 * i + 1) / 6
+            Draw.arcGauge(ctx, cx: rcx, cy: ringY, radius: rr, percent: pct,
+                          color: c, colorDark: Color.border, thickness: 7)
+            Draw.centeredText(ctx, valStr, cx: rcx, y: ringY - 13,
+                              font: Fonts.system(21, weight: .bold), color: Color.textW)
+            Draw.centeredText(ctx, label, cx: rcx, y: ringY + rr + 10,
+                              font: Fonts.system(14), color: Color.textL)
         }
-        netRow("↓", net?.rxBytesPerSec ?? 0, Color.green, dy + 46)
-        netRow("↑", net?.txBytesPerSec ?? 0, Color.cyan, dy + 78)
-
-        // System — CPU / mem / temp (reclaimed from the retired CPU panel)
-        let syy = dy + 120
-        Draw.text(ctx, "系统", x: x + 20, y: syy, font: Fonts.system(18), color: Color.textL)
-        let iw = pw - 40
-        func sysRow(_ label: String, _ value: String, _ color: CGColor, _ ry: Int) {
-            Draw.text(ctx, label, x: x + 20, y: ry, font: Fonts.system(17), color: Color.textL)
-            let vf = Fonts.system(17, weight: .medium)
-            let vw = (value as NSString).size(withAttributes: [.font: vf]).width
-            Draw.text(ctx, value, x: Int(CGFloat(x + 20 + iw) - vw), y: ry, font: vf, color: color)
+        ring(0, "CPU", cpu.total, String(format: "%.0f", cpu.total), level(cpu.total, 60, 85))
+        ring(1, "内存", mem.percent, String(format: "%.0f", mem.percent), level(mem.percent, 70, 90))
+        if let t = temp.cpuTemp {
+            ring(2, "温度", min(100, t / 90 * 100), String(format: "%.0f°", t), level(t, 65, 82))
+        } else {
+            ring(2, "温度", 0, "—", Color.textL)
         }
-        sysRow("CPU", String(format: "%.0f%%", cpu.total), Color.textW, syy + 28)
-        sysRow("内存", String(format: "%.0f%%", mem.percent), Color.textW, syy + 54)
-        let tempStr = temp.cpuTemp.map { String(format: "%.0f°C", $0) } ?? "—"
-        sysRow("温度", tempStr, Color.textW, syy + 80)
+
         if let sys {
             let h = sys.uptimeSeconds / 3600
-            let up = h >= 24 ? "\(h / 24)d \(h % 24)h" : "\(h)h \((sys.uptimeSeconds % 3600) / 60)m"
-            sysRow("开机", up, Color.textS, syy + 106)
+            let up = h >= 24 ? "开机 \(h / 24)d \(h % 24)h" : "开机 \(h)h \((sys.uptimeSeconds % 3600) / 60)m"
+            Draw.centeredText(ctx, up, cx: cx, y: py + ph - 22, font: Fonts.system(14), color: Color.textD)
         }
     }
 
-    private func rate(_ bps: Double) -> String {
-        if bps < 1024 { return String(format: "%.0f B/s", max(0, bps)) }
-        if bps < 1024 * 1024 { return String(format: "%.0f KB/s", bps / 1024) }
-        return String(format: "%.1f MB/s", bps / 1024 / 1024)
+    /// Level → color: green below `warn`, orange below `hot`, red above.
+    private func level(_ v: Double, _ warn: Double, _ hot: Double) -> CGColor {
+        v >= hot ? Color.red : (v >= warn ? Color.orange : Color.green)
+    }
+
+    /// Line sparkline of `values` scaled to [0, maxV] within the rect; optional area fill.
+    private func drawSparkline(_ ctx: CGContext, values: [Double], x: Int, y: Int, w: Int, h: Int,
+                               maxV: Double, color: CGColor, fill: Bool) {
+        guard values.count >= 2 else { return }
+        let n = values.count
+        func px(_ i: Int) -> CGFloat { CGFloat(x) + CGFloat(w) * CGFloat(i) / CGFloat(n - 1) }
+        func py(_ v: Double) -> CGFloat { CGFloat(y + h) - CGFloat(min(v, maxV) / maxV) * CGFloat(h) }
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: px(0), y: py(values[0])))
+        for i in 1..<n { path.addLine(to: CGPoint(x: px(i), y: py(values[i]))) }
+        if fill, let area = path.mutableCopy() {
+            area.addLine(to: CGPoint(x: px(n - 1), y: CGFloat(y + h)))
+            area.addLine(to: CGPoint(x: px(0), y: CGFloat(y + h)))
+            area.closeSubpath()
+            ctx.setFillColor(color.copy(alpha: 0.16) ?? color)
+            ctx.addPath(area); ctx.fillPath()
+        }
+        ctx.setStrokeColor(color); ctx.setLineWidth(2); ctx.setLineJoin(.round)
+        ctx.addPath(path); ctx.strokePath()
     }
 
     /// Local lunar (Chinese) calendar: ganzhi year + zodiac + month/day. No network.
