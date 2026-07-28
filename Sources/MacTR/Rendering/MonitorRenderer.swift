@@ -874,60 +874,51 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
 
     // MARK: - Screensaver (shown while the screen is locked)
 
-    /// Full-canvas ambient saver: a small "base room" — starry-window wall + warm floor
-    /// — with Skadi pacing back and forth along the floor, and a clock cluster in the
-    /// corner. (Phase 1: procedural room; PRTS floor/furniture can drop in later.)
+    /// Full-canvas ambient saver: a real PRTS base room (天镜阁会客堂) as the backdrop,
+    /// with Skadi pacing its floor and a clock cluster in the space beside it.
     private func renderScreensaver(_ ctx: CGContext) {
         let w = Layout.width, h = Layout.height
         let fw = CGFloat(w), fh = CGFloat(h)
         let now = Date().timeIntervalSince1970
-        let horizon = fh * 0.55
 
-        // Starry window in the upper wall
-        drawStars(ctx, now)
-
-        // Floor (warm, a touch lighter than the wall) + horizon line
-        ctx.setFillColor(CGColor(red: 30 / 255, green: 27 / 255, blue: 34 / 255, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: horizon, width: fw, height: fh - horizon))
-        ctx.setStrokeColor(Color.border); ctx.setLineWidth(1.5)
-        ctx.move(to: CGPoint(x: 0, y: horizon)); ctx.addLine(to: CGPoint(x: fw, y: horizon))
-        ctx.strokePath()
-        // Faint perspective lines toward a central vanishing point
-        ctx.setStrokeColor(Color.border.copy(alpha: 0.5) ?? Color.border); ctx.setLineWidth(1)
-        let vp = CGPoint(x: fw * 0.5, y: horizon)
-        for f in stride(from: 0.0, through: 1.0, by: 0.2) {
-            ctx.move(to: CGPoint(x: CGFloat(f) * fw, y: fh)); ctx.addLine(to: vp); ctx.strokePath()
+        // Room backdrop, full height, left-anchored.
+        var roomW = fw * 0.42
+        if let room = RoomAsset.receptionHall {
+            roomW = fh * CGFloat(room.width) / CGFloat(room.height)
+            drawImageUpright(ctx, room, in: CGRect(x: 0, y: 0, width: roomW, height: fh))
+        } else {
+            drawStars(ctx, now)
         }
 
-        // Skadi pacing along the floor — triangle wave across the room, facing her travel
+        // Skadi paces the room floor — triangle-wave travel, facing her direction.
         let frames = SkadiAsset.move.isEmpty ? SkadiAsset.relax : SkadiAsset.move
         if !frames.isEmpty {
             let img = frames[Int(now * SkadiAsset.fps) % frames.count]
-            let ih = fh * 0.62
+            let ih = fh * 0.5
             let iw = ih * CGFloat(img.width) / CGFloat(img.height)
-            let period = 20.0
+            let period = 18.0
             let phase = now.truncatingRemainder(dividingBy: period) / period
             let tri = phase < 0.5 ? phase * 2 : (1 - phase) * 2
-            let left = fw * 0.06, right = fw * 0.62 - iw
+            let left = roomW * 0.10, right = roomW * 0.9 - iw
             let sx = left + (right - left) * CGFloat(tri)
-            let feetY = fh - 10
-            ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.35))
-            ctx.fillEllipse(in: CGRect(x: sx + iw * 0.15, y: feetY - 10, width: iw * 0.7, height: 16))
+            let feetY = fh - fh * 0.05
+            ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.3))
+            ctx.fillEllipse(in: CGRect(x: sx + iw * 0.15, y: feetY - 8, width: iw * 0.7, height: 14))
             drawImageUpright(ctx, img, in: CGRect(x: sx, y: feetY - ih, width: iw, height: ih),
                              flipX: phase < 0.5)
         }
 
-        // Clock cluster, upper-right
-        let rx = Int(fw * 0.80)
+        // Clock cluster in the space to the right of the room.
+        let cxr = Int(roomW + (fw - roomW) / 2)
         let df = DateFormatter(); df.dateFormat = "HH:mm"
-        Draw.centeredText(ctx, df.string(from: Date()), cx: rx, y: Int(fh * 0.14),
-                          font: Fonts.system(120, weight: .thin), color: Color.textW)
+        Draw.centeredText(ctx, df.string(from: Date()), cx: cxr, y: Int(fh * 0.15),
+                          font: Fonts.system(150, weight: .thin), color: Color.textW)
         let zh = DateFormatter(); zh.locale = Locale(identifier: "zh_CN")
         zh.dateFormat = "EEEE  M月d日"
-        Draw.centeredText(ctx, zh.string(from: Date()), cx: rx, y: Int(fh * 0.52),
-                          font: Fonts.system(28, weight: .medium), color: Color.textS)
-        Draw.centeredText(ctx, lunarString(Date()), cx: rx, y: Int(fh * 0.52) + 38,
-                          font: Fonts.system(24), color: Color.orange)
+        Draw.centeredText(ctx, zh.string(from: Date()), cx: cxr, y: Int(fh * 0.66),
+                          font: Fonts.system(30, weight: .medium), color: Color.textS)
+        Draw.centeredText(ctx, lunarString(Date()), cx: cxr, y: Int(fh * 0.66) + 42,
+                          font: Fonts.system(26), color: Color.orange)
     }
 
     private func drawStars(_ ctx: CGContext, _ now: Double) {
