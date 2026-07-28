@@ -33,6 +33,15 @@ struct AgentEntry: Sendable {
     let stepText: String?
 }
 
+/// One entry in the cross-session activity feed (a state transition).
+struct AgentEvent: Sendable {
+    let icon: String        // ▶ started · ✓ finished a turn · ⏸ now waiting on you
+    let verb: String
+    let project: String
+    let kind: AgentKind
+    let atSecs: Int         // wall-clock seconds, for "Ns ago"
+}
+
 /// All recent agent sessions + account-level aggregates. Token/quota are demoted
 /// to a compact footer, so they live on the snapshot, not on each entry.
 struct AgentsSnapshot: Sendable {
@@ -43,6 +52,7 @@ struct AgentsSnapshot: Sendable {
     let codexTodayTokens: UInt64
     let codexQuotaUsedPercent: Double?
     let codexQuotaResetsAt: Date?
+    var recentEvents: [AgentEvent] = []
 
     /// Anything animating right now (working breathing or attention flash).
     var anyLive: Bool { entries.contains { $0.isWorking || $0.flash } }
@@ -73,6 +83,9 @@ final class AgentUsageCollector: @unchecked Sendable {
     private let flashDuration: TimeInterval = 10
     private var attentionSince: [String: Date] = [:]   // id → rising-edge time
     private var prevWaiting: Set<String> = []
+    // Activity feed: last-seen state per session + a rolling event log.
+    private var prevStates: [String: Int] = [:]        // id → 0 idle / 1 working / 2 waiting
+    private var eventLog: [AgentEvent] = []
 
     // Control-tower list scope: a session is listed if it was active within this
     // window, capped per CLI so a busy history can't flood the list.
@@ -90,15 +103,38 @@ final class AgentUsageCollector: @unchecked Sendable {
         rolloverIfNeeded()
         let (cEntries, cTokens, cAvail) = collectClaude()
         let (xEntries, xTokens, xAvail, qUsed, qResets) = collectCodex()
-        // Drop flash state for sessions that aged out of the list, so the dicts
-        // stay bounded and a returning session flashes fresh.
-        let liveIDs = Set((cEntries + xEntries).map { $0.id })
+        let all = cEntries + xEntries
+        let liveIDs = Set(all.map { $0.id })
+        // Drop flash state for sessions that aged out of the list.
         attentionSince = attentionSince.filter { liveIDs.contains($0.key) }
         prevWaiting = prevWaiting.intersection(liveIDs)
-        return AgentsSnapshot(entries: cEntries + xEntries,
-                              claudeAvailable: cAvail, codexAvailable: xAvail,
-                              claudeTodayTokens: cTokens, codexTodayTokens: xTokens,
-                              codexQuotaUsedPercent: qUsed, codexQuotaResetsAt: qResets)
+
+        // Activity feed: emit an event whenever a session changes state.
+        let nowSecs = Int(Date().timeIntervalSince1970)
+        for e in all {
+            let cur = e.isWorking ? 1 : (e.waiting ? 2 : 0)
+            if let prev = prevStates[e.id], prev != cur, let proj = e.project {
+                let ev: (icon: String, verb: String)?
+                if cur == 1 { ev = ("▶", "开始") }
+                else if prev == 1 { ev = ("✓", "完成一轮") }
+                else if cur == 2 { ev = ("⏸", "等你输入") }
+                else { ev = nil }
+                if let ev = ev {
+                    eventLog.append(AgentEvent(icon: ev.icon, verb: ev.verb,
+                                               project: proj, kind: e.kind, atSecs: nowSecs))
+                }
+            }
+            prevStates[e.id] = cur
+        }
+        prevStates = prevStates.filter { liveIDs.contains($0.key) }
+        if eventLog.count > 24 { eventLog.removeFirst(eventLog.count - 24) }
+
+        var snap = AgentsSnapshot(entries: all,
+                                  claudeAvailable: cAvail, codexAvailable: xAvail,
+                                  claudeTodayTokens: cTokens, codexTodayTokens: xTokens,
+                                  codexQuotaUsedPercent: qUsed, codexQuotaResetsAt: qResets)
+        snap.recentEvents = Array(eventLog.suffix(8).reversed())  // newest first
+        return snap
     }
 
     /// Per-session attention state. `waiting` persists while the session is recent;

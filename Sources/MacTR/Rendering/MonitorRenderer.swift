@@ -166,7 +166,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             swapInPerSec: 0, swapOutPerSec: 0, swapAvailable: true, pressure: 1)
         let temp = TemperatureSnapshot(cpuTemp: 52, gpuTemp: 45, thermalState: 0)
         let sys = SystemSnapshot(uptimeSeconds: 27 * 3600 + 3 * 60, processCount: 612)
-        let agents = AgentsSnapshot(
+        var agents = AgentsSnapshot(
             entries: [
                 AgentEntry(kind: .codex, id: "codex:web-service", project: "web-service",
                            message: """
@@ -202,6 +202,11 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             claudeTodayTokens: 48_800_000, codexTodayTokens: 60_500_000,
             codexQuotaUsedPercent: 57,
             codexQuotaResetsAt: Date().addingTimeInterval(3600 * 24 * 6))
+        agents.recentEvents = [
+            AgentEvent(icon: "⏸", verb: "等你输入", project: "web-service", kind: .codex, atSecs: 0),
+            AgentEvent(icon: "✓", verb: "完成一轮", project: "knight-server", kind: .claude, atSecs: 0),
+            AgentEvent(icon: "▶", verb: "开始", project: "mac-tr", kind: .claude, atSecs: 0),
+        ]
         return (cpu, mem, temp, sys, agents)
     }
 
@@ -1062,24 +1067,31 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
                                    x: Int, w: Int, y: Int) {
         Draw.line(ctx, from: CGPoint(x: x, y: y - 8),
                   to: CGPoint(x: x + w, y: y - 8), color: Color.border)
+
+        // Right: today's token + quota summary (right-aligned).
         var parts: [String] = []
-        if agents.claudeAvailable {
-            parts.append("Claude \(formatTokensCN(agents.claudeTodayTokens))")
-        }
-        if agents.codexAvailable {
-            parts.append("Codex \(formatTokensCN(agents.codexTodayTokens))")
-        }
-        var line = "今日 Token  " + parts.joined(separator: "  ·  ")
+        if agents.claudeAvailable { parts.append("Claude \(formatTokensCN(agents.claudeTodayTokens))") }
+        if agents.codexAvailable { parts.append("Codex \(formatTokensCN(agents.codexTodayTokens))") }
+        var tok = "Token " + parts.joined(separator: " · ")
         if let used = agents.codexQuotaUsedPercent {
-            line += String(format: "  ·  额度 %.0f%%", max(0, 100 - used))
-            if let r = agents.codexQuotaResetsAt {
-                let s = max(0, Int(r.timeIntervalSinceNow))
-                let rs = s >= 86400 ? "\(s / 86400)天后"
-                    : (s >= 3600 ? "\(s / 3600)时后" : "\(max(s / 60, 1))分后")
-                line += "(\(rs))"
+            tok += String(format: " · 额度%.0f%%", max(0, 100 - used))
+        }
+        let tokF = Fonts.system(16)
+        let tokW = (tok as NSString).size(withAttributes: [.font: tokF]).width
+        Draw.text(ctx, tok, x: Int(CGFloat(x + w) - tokW), y: y, font: tokF, color: Color.textL)
+
+        // Left: live activity feed (newest first), truncated to the remaining width.
+        let feedMaxW = CGFloat(w) - tokW - 24
+        if feedMaxW > 60 {
+            let feed = agents.recentEvents.prefix(4)
+                .map { "\($0.icon) \($0.project)" }
+                .joined(separator: "   ")
+            if !feed.isEmpty {
+                let fF = Fonts.system(16)
+                Draw.text(ctx, truncate(feed, font: fF, maxW: feedMaxW),
+                          x: x, y: y, font: fF, color: Color.textS)
             }
         }
-        Draw.text(ctx, line, x: x, y: y, font: Fonts.system(16), color: Color.textL)
     }
 
     /// Segmented plan-progress bar: completed steps solid, current bright, pending dim.
