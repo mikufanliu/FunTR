@@ -880,60 +880,64 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
 
     // MARK: - Screensaver (shown while the screen is locked)
 
-    /// Full-canvas ambient saver: a real PRTS base room as the backdrop (selected or
-    /// auto-rotating), with Skadi pacing its floor and a clock cluster beside it.
+    /// Full-canvas ambient saver: a real PRTS base room filling the whole screen
+    /// (selected or auto-rotating), Skadi pacing the floor, and a clock card overlaid.
     private func renderScreensaver(_ ctx: CGContext) {
         let fw = CGFloat(Layout.width), fh = CGFloat(Layout.height)
         let now = Date().timeIntervalSince1970
 
-        // Pick the room: explicit selection, else rotate every 45s.
         lock.lock(); let mode = _saverRoomMode; lock.unlock()
         let count = RoomAsset.count
-        var roomW = fw * 0.6, roomH = fh, roomY: CGFloat = 0
         var idx = 0
         if count > 0 {
             idx = mode > 0 ? min(mode - 1, count - 1) : Int(now / 45) % count
             let room = RoomAsset.images[idx]
-            let aspect = CGFloat(room.width) / CGFloat(room.height)
-            roomW = min(fh * aspect, fw * 0.66)     // cap width so the clock has room
-            roomH = roomW / aspect
-            roomY = (fh - roomH) / 2
-            drawImageUpright(ctx, room, in: CGRect(x: 0, y: roomY, width: roomW, height: roomH))
+            // Aspect-fill the whole canvas (overflow is cropped at the edges).
+            let scale = max(fw / CGFloat(room.width), fh / CGFloat(room.height))
+            let sw = CGFloat(room.width) * scale, sh = CGFloat(room.height) * scale
+            drawImageUpright(ctx, room, in: CGRect(x: (fw - sw) / 2, y: (fh - sh) / 2,
+                                                   width: sw, height: sh))
         } else {
             drawStars(ctx, now)
         }
 
-        // Skadi paces the room floor — triangle-wave travel, facing her direction.
+        // Skadi paces the floor — triangle-wave travel, facing her direction of travel.
         let frames = SkadiAsset.move.isEmpty ? SkadiAsset.relax : SkadiAsset.move
         if !frames.isEmpty {
             let img = frames[Int(now * SkadiAsset.fps) % frames.count]
-            let ih = roomH * 0.5
+            let ih = fh * 0.58
             let iw = ih * CGFloat(img.width) / CGFloat(img.height)
             let period = 18.0
             let phase = now.truncatingRemainder(dividingBy: period) / period
             let tri = phase < 0.5 ? phase * 2 : (1 - phase) * 2
-            let left = roomW * 0.08, right = roomW * 0.88 - iw
+            let left = fw * 0.05, right = fw * 0.72 - iw
             let sx = left + (right - left) * CGFloat(tri)
-            let feetY = roomY + roomH - roomH * 0.05
+            let feetY = fh - 8
             ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.3))
             ctx.fillEllipse(in: CGRect(x: sx + iw * 0.15, y: feetY - 8, width: iw * 0.7, height: 14))
             drawImageUpright(ctx, img, in: CGRect(x: sx, y: feetY - ih, width: iw, height: ih),
-                             flipX: phase < 0.5)
+                             flipX: phase >= 0.5)
         }
 
-        // Clock cluster + room name in the space beside the room.
-        let cxr = Int(roomW + (fw - roomW) / 2)
+        // Clock card, overlaid top-right on a soft scrim so it reads over any room.
+        let boxW: CGFloat = 540, boxX = fw - boxW - 36, boxY: CGFloat = 40
+        let boxH = fh - 80
+        let scrim = CGPath(roundedRect: CGRect(x: boxX, y: boxY, width: boxW, height: boxH),
+                           cornerWidth: 22, cornerHeight: 22, transform: nil)
+        ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.34))
+        ctx.addPath(scrim); ctx.fillPath()
+        let cxr = Int(boxX + boxW / 2)
         let df = DateFormatter(); df.dateFormat = "HH:mm"
-        Draw.centeredText(ctx, df.string(from: Date()), cx: cxr, y: Int(fh * 0.15),
-                          font: Fonts.system(140, weight: .thin), color: Color.textW)
+        Draw.centeredText(ctx, df.string(from: Date()), cx: cxr, y: Int(fh * 0.16),
+                          font: Fonts.system(120, weight: .thin), color: Color.textW)
         let zh = DateFormatter(); zh.locale = Locale(identifier: "zh_CN")
         zh.dateFormat = "EEEE  M月d日"
-        Draw.centeredText(ctx, zh.string(from: Date()), cx: cxr, y: Int(fh * 0.62),
+        Draw.centeredText(ctx, zh.string(from: Date()), cx: cxr, y: Int(fh * 0.60),
                           font: Fonts.system(28, weight: .medium), color: Color.textS)
-        Draw.centeredText(ctx, lunarString(Date()), cx: cxr, y: Int(fh * 0.62) + 40,
+        Draw.centeredText(ctx, lunarString(Date()), cx: cxr, y: Int(fh * 0.60) + 40,
                           font: Fonts.system(24), color: Color.orange)
         if count > 0, idx < RoomAsset.names.count {
-            Draw.centeredText(ctx, RoomAsset.names[idx], cx: cxr, y: Int(fh * 0.62) + 78,
+            Draw.centeredText(ctx, RoomAsset.names[idx], cx: cxr, y: Int(fh * 0.60) + 78,
                               font: Fonts.system(17), color: Color.textL)
         }
     }

@@ -169,6 +169,8 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
     private var statusMenuItem: NSMenuItem!
     private var versionMenuItem: NSMenuItem!
     private var reconnectItem: NSMenuItem!
+    private var saverPreviewItem: NSMenuItem!
+    private var screensaverPreviewing = false
     private var updateTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -340,6 +342,11 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
         previewItem.target = self
         menu.addItem(previewItem)
 
+        // Manual screensaver preview (the saver otherwise triggers on screen lock)
+        saverPreviewItem = NSMenuItem(title: "屏保预览", action: #selector(toggleScreensaverPreview), keyEquivalent: "")
+        saverPreviewItem.target = self
+        menu.addItem(saverPreviewItem)
+
         menu.addItem(.separator())
 
         // About
@@ -423,6 +430,12 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     @objc private func showPreviewManually() {
         showPreview()
+    }
+
+    @objc private func toggleScreensaverPreview() {
+        screensaverPreviewing.toggle()
+        saverPreviewItem.state = screensaverPreviewing ? .on : .off
+        appState.setScreensaver(screensaverPreviewing)
     }
 
     // User closed the preview window — stop rendering to it; reopen via the
