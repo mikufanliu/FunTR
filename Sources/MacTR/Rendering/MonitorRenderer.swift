@@ -27,6 +27,12 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     private var _net: NetworkSnapshot?
     // Recent network throughput for the STATUS-panel sparkline (mutated only under renderMutex).
     private var netHistory: [(rx: Double, tx: Double)] = []
+    // Event-reactive operator: edge-detect agent state to fire a brief reaction clip.
+    private var prevWorkingCount = 0
+    private var prevWaitingIDs: Set<String> = []
+    private var reactionClip: [CGImage]?
+    private var reactionUntil: TimeInterval = 0
+    private var operatorPrimed = false  // skip reactions on the very first frame
 
     // Reusable CGContext — avoids allocating 3.6MB every 0.5s (prevents CG raster data leak)
     private var reusableCtx: CGContext?
@@ -753,20 +759,40 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         Draw.text(ctx, status, x: Int(CGFloat(x + pw - 20) - sW), y: py + 20,
                   font: sF, color: busy ? Color.green : Color.textL)
 
-        // Behaviour state machine: while an agent works she cycles COMBAT behaviours
-        // (skills, with a battle-idle beat between); while idle she cycles BASE
-        // behaviours (mostly relax, occasional interact/move, and a nap). Each
-        // behaviour holds for `dwell` seconds, chosen by wall-clock so it's stateless.
         let now = Date().timeIntervalSince1970
-        let dwell = 7.0
-        let combat: [[CGImage]] = [SkadiAsset.skill2, SkadiAsset.skill3]
-        let base: [[CGImage]] = [SkadiAsset.relax, SkadiAsset.relax, SkadiAsset.interact,
-                                 SkadiAsset.move, SkadiAsset.relax, SkadiAsset.sleep]
-        let clips = busy ? combat : base
-        // Clips were sampled at SkadiAsset.fps, so play back at that rate for real speed.
+
+        // Event edge-detection → a brief reaction clip that overrides the normal cycle:
+        //   a newly-waiting agent  → Interact (she turns to call you)
+        //   an agent just finished → Skill_3 (a victory flourish)
+        let workingNow = agents.entries.filter { $0.isWorking }.count
+        let waitingNow = Set(agents.entries.filter { $0.waiting }.map { $0.id })
+        if operatorPrimed {
+            if !waitingNow.subtracting(prevWaitingIDs).isEmpty {
+                reactionClip = SkadiAsset.interact; reactionUntil = now + 4
+            } else if workingNow < prevWorkingCount {
+                reactionClip = SkadiAsset.skill3; reactionUntil = now + 4
+            }
+        }
+        prevWorkingCount = workingNow
+        prevWaitingIDs = waitingNow
+        operatorPrimed = true
+
         let fps = SkadiAsset.fps
-        var frames = clips[Int(now / dwell) % clips.count]
-        if frames.isEmpty { frames = busy ? SkadiAsset.skill2 : SkadiAsset.relax }
+        let frames: [CGImage]
+        if now < reactionUntil, let rc = reactionClip, !rc.isEmpty {
+            frames = rc
+        } else {
+            // Behaviour cycle: combat behaviours while working, base behaviours while idle.
+            // Each holds `dwell` seconds, picked statelessly from wall-clock.
+            let dwell = 7.0
+            let combat: [[CGImage]] = [SkadiAsset.skill2, SkadiAsset.skill3]
+            let base: [[CGImage]] = [SkadiAsset.relax, SkadiAsset.relax, SkadiAsset.interact,
+                                     SkadiAsset.move, SkadiAsset.relax, SkadiAsset.sleep]
+            let clips = busy ? combat : base
+            var f = clips[Int(now / dwell) % clips.count]
+            if f.isEmpty { f = busy ? SkadiAsset.skill2 : SkadiAsset.relax }
+            frames = f
+        }
         guard !frames.isEmpty else { return }
         let img = frames[Int(now * fps) % frames.count]
 
