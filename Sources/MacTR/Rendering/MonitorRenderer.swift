@@ -1140,12 +1140,18 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let tokW = (tok as NSString).size(withAttributes: [.font: tokF]).width
         Draw.text(ctx, tok, x: Int(CGFloat(x + w) - tokW), y: y, font: tokF, color: Color.textL)
 
-        // Left: live activity feed (newest first), truncated to the remaining width.
+        // Left: live activity feed — newest first, one entry per project, with the verb
+        // so it reads "✓ knight-server 完成一轮" instead of a cryptic repeated name.
         let feedMaxW = CGFloat(w) - tokW - 24
         if feedMaxW > 60 {
-            let feed = agents.recentEvents.prefix(4)
-                .map { "\($0.icon) \($0.project)" }
-                .joined(separator: "   ")
+            var seen = Set<String>()
+            var segs: [String] = []
+            for e in agents.recentEvents {   // recentEvents is newest-first
+                guard seen.insert(e.project).inserted else { continue }
+                segs.append("\(e.icon) \(e.project) \(e.verb)")
+                if segs.count >= 3 { break }
+            }
+            let feed = segs.joined(separator: "    ")
             if !feed.isEmpty {
                 let fF = Fonts.system(16)
                 Draw.text(ctx, truncate(feed, font: fF, maxW: feedMaxW),
