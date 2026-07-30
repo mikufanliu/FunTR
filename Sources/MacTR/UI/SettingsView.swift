@@ -74,6 +74,17 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Theme") {
+                Picker("主题", selection: $state.themeName) {
+                    ForEach(ThemeKind.allCases, id: \.self) { kind in
+                        Text(kind.rawValue).tag(kind.rawValue)
+                    }
+                }
+                Text("经典 / 初音未来(teal+洋红)/ 罗德岛(琥珀 HUD)——立即生效")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Brightness") {
                 HStack {
                     Slider(value: brightnessBinding, in: 1...10, step: 1) {

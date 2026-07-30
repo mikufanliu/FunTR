@@ -49,6 +49,21 @@ final class AppState {
         }
     }
 
+    // Visual theme (persisted). Applied globally via Theme.current, which the
+    // renderer's drawing primitives read — switching reskins the whole dashboard.
+    var themeName: String = UserDefaults.standard.string(forKey: "themeName") ?? ThemeKind.classic.rawValue {
+        didSet {
+            UserDefaults.standard.set(themeName, forKey: "themeName")
+            applyTheme()
+        }
+    }
+
+    /// Map the persisted name to a ThemeKind and set it globally.
+    func applyTheme() {
+        let kind = ThemeKind.allCases.first { $0.rawValue == themeName } ?? .classic
+        Theme.set(kind)
+    }
+
     // Metrics (for menu bar display)
     var frameCount = 0
     var lastFrameSize = 0
@@ -60,6 +75,7 @@ final class AppState {
     // MARK: - Lifecycle
 
     func start() {
+        applyTheme()
         let eng = DisplayEngine { [weak self] status in
             Task { @MainActor in
                 guard let self else { return }

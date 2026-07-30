@@ -20,6 +20,15 @@ func log(_ message: String) {
 @main
 struct MacTREntry {
     static func main() {
+        // Optional theme override for headless modes (--theme miku|rhodes|classic).
+        if let ti = CommandLine.arguments.firstIndex(of: "--theme"), ti + 1 < CommandLine.arguments.count {
+            let arg = CommandLine.arguments[ti + 1]
+            for kind in ThemeKind.allCases where "\(kind)" == arg || kind.rawValue == arg {
+                Theme.set(kind)
+                UserDefaults.standard.set(kind.rawValue, forKey: "themeName")
+            }
+        }
+
         // CLI mode
         if CommandLine.arguments.contains("--cli") {
             runCLI()

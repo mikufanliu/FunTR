@@ -30,18 +30,49 @@ enum Draw {
             end: CGPoint(x: 0, y: 0),
             options: [])
         ctx.restoreGState()
+
+        // Themed backdrop motifs (grid + scanlines) — very faint, for the sci-fi feel.
+        let theme = Theme.current
+        let w = CGFloat(Layout.width), h = CGFloat(Layout.height)
+        if theme.gridBackground {
+            ctx.setStrokeColor(Color.cyan.copy(alpha: 0.05) ?? Color.cyan)
+            ctx.setLineWidth(1)
+            var gx: CGFloat = 0
+            while gx <= w { ctx.move(to: CGPoint(x: gx, y: 0)); ctx.addLine(to: CGPoint(x: gx, y: h)); gx += 48 }
+            var gy: CGFloat = 0
+            while gy <= h { ctx.move(to: CGPoint(x: 0, y: gy)); ctx.addLine(to: CGPoint(x: w, y: gy)); gy += 48 }
+            ctx.strokePath()
+        }
+        if theme.scanlines {
+            ctx.setStrokeColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.10))
+            ctx.setLineWidth(1)
+            var sy: CGFloat = 0
+            while sy <= h { ctx.move(to: CGPoint(x: 0, y: sy)); ctx.addLine(to: CGPoint(x: w, y: sy)); sy += 3 }
+            ctx.strokePath()
+        }
     }
 
     // MARK: - Panel
 
-    /// Draw a rounded panel with accent color top bar.
-    /// Assumes flipped context (Y=0 at top).
+    /// Draw a themed panel: rounded (classic/miku) or angular HUD (rhodes) frame
+    /// with an accent header bar, optional under-header glow, and optional corner
+    /// brackets. Assumes flipped context (Y=0 at top).
     static func panel(_ ctx: CGContext, x: Int, y: Int, w: Int, h: Int, accent: CGColor) {
+        let theme = Theme.current
+        let radius: CGFloat = theme.sharpCorners ? 3 : 16
         let rect = CGRect(x: x, y: y, width: w, height: h)
-        let path = CGPath(roundedRect: rect, cornerWidth: 16, cornerHeight: 16, transform: nil)
+        let path = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
         ctx.setFillColor(Color.panelBG)
         ctx.addPath(path)
         ctx.fillPath()
+
+        // Hairline border for the HUD themes (adds structure over the flat fill).
+        if theme.cornerBrackets || theme.sharpCorners {
+            ctx.setStrokeColor(Color.border)
+            ctx.setLineWidth(1)
+            ctx.addPath(path)
+            ctx.strokePath()
+        }
 
         // Accent bar at top (y is top in flipped coords)
         let barRect = CGRect(x: x + 2, y: y, width: w - 4, height: 3)
@@ -51,14 +82,35 @@ enum Draw {
         ctx.fillPath()
 
         // Subtle glow below accent
-        for i in 0..<6 {
-            let t = 1.0 - Double(i) / 6.0
-            let alpha = 0.12 * t
-            ctx.setStrokeColor(accent.copy(alpha: CGFloat(alpha)) ?? accent)
-            ctx.setLineWidth(1)
-            let lineY = CGFloat(y + 4 + i)
-            ctx.move(to: CGPoint(x: CGFloat(x + 2), y: lineY))
-            ctx.addLine(to: CGPoint(x: CGFloat(x + w - 2), y: lineY))
+        if theme.accentGlow {
+            for i in 0..<6 {
+                let t = 1.0 - Double(i) / 6.0
+                let alpha = 0.12 * t
+                ctx.setStrokeColor(accent.copy(alpha: CGFloat(alpha)) ?? accent)
+                ctx.setLineWidth(1)
+                let lineY = CGFloat(y + 4 + i)
+                ctx.move(to: CGPoint(x: CGFloat(x + 2), y: lineY))
+                ctx.addLine(to: CGPoint(x: CGFloat(x + w - 2), y: lineY))
+                ctx.strokePath()
+            }
+        }
+
+        // Corner brackets — short L-shaped accent ticks at the four corners.
+        if theme.cornerBrackets {
+            let s: CGFloat = 16
+            let inset: CGFloat = 6
+            let l = CGFloat(x) + inset, r = CGFloat(x + w) - inset
+            let tp = CGFloat(y) + inset, bt = CGFloat(y + h) - inset
+            ctx.setStrokeColor(accent.copy(alpha: 0.9) ?? accent)
+            ctx.setLineWidth(2); ctx.setLineCap(.round)
+            // each corner: two strokes forming an L
+            let corners: [(CGFloat, CGFloat, CGFloat, CGFloat)] = [
+                (l, tp, 1, 1), (r, tp, -1, 1), (l, bt, 1, -1), (r, bt, -1, -1),
+            ]
+            for (cx, cy, dx, dy) in corners {
+                ctx.move(to: CGPoint(x: cx, y: cy)); ctx.addLine(to: CGPoint(x: cx + s * dx, y: cy))
+                ctx.move(to: CGPoint(x: cx, y: cy)); ctx.addLine(to: CGPoint(x: cx, y: cy + s * dy))
+            }
             ctx.strokePath()
         }
     }
