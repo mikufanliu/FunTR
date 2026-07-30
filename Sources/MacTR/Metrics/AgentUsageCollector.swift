@@ -9,6 +9,7 @@
 // cost per tick is a stat() per candidate file plus any appended bytes —
 // full parses happen only on first scan and day rollover.
 
+import Darwin
 import Foundation
 
 // MARK: - Data Structures
@@ -31,6 +32,10 @@ struct AgentEntry: Sendable {
     let stepCurrent: Int?           // active plan step (1-based); nil = no plan
     let stepTotal: Int?
     let stepText: String?
+    // Why it's blocked mid-turn, when the CLI tells us — "permission prompt",
+    // "input needed", "dialog open". nil when it ended its turn normally.
+    var waitingFor: String? = nil
+    var model: String? = nil        // model id driving this session
 }
 
 /// One entry in the cross-session activity feed (a state transition).
@@ -140,15 +145,21 @@ final class AgentUsageCollector: @unchecked Sendable {
 
     /// Per-session attention state. `waiting` persists while the session is recent;
     /// `flash` pulses only for `flashDuration` after the rising edge.
-    private func attentionState(id: String, rawWaiting: Bool, ago: Int)
+    /// `persistent` is for states that are actionable rather than merely
+    /// informational — a permission prompt keeps flashing until you answer it,
+    /// where a finished turn only pulses for `flashDuration`.
+    private func attentionState(id: String, rawWaiting: Bool, ago: Int,
+                                persistent: Bool = false)
         -> (waiting: Bool, flash: Bool) {
-        let waiting = rawWaiting && ago < 900
+        let waiting = persistent ? rawWaiting : (rawWaiting && ago < 900)
         let now = Date()
         if waiting && !prevWaiting.contains(id) { attentionSince[id] = now }
         if waiting { prevWaiting.insert(id) } else { prevWaiting.remove(id) }
         var flash = false
-        if waiting, let since = attentionSince[id],
-           now.timeIntervalSince(since) < flashDuration {
+        if waiting, persistent {
+            flash = true
+        } else if waiting, let since = attentionSince[id],
+                  now.timeIntervalSince(since) < flashDuration {
             flash = true
         }
         return (waiting, flash)
@@ -217,28 +228,116 @@ final class AgentUsageCollector: @unchecked Sendable {
         }
 
         candidates.sort { $0.mtime > $1.mtime }
+        // Claude Code publishes the real UI state per session; a permission prompt and
+        // a running tool are INDISTINGUISHABLE in the transcript (both end on an
+        // assistant tool_use with no tool_result yet), so the tail heuristic below
+        // reads "needs confirmation" as "still working" and never flashes.
+        let liveStates = claudeSessionStates()
         var entries: [AgentEntry] = []
         var projSeen: [String: Int] = [:]
         for c in candidates.prefix(maxEntriesPerKind) {
             let ago = max(0, Int(now.timeIntervalSince(c.mtime)))
-            let (proj, message, rawWaiting, step) = claudeActivity(path: c.path)
+            let (proj, message, rawWaiting, step, model) = claudeActivity(path: c.path)
             let base = proj ?? c.fallbackName
             let n = (projSeen[base] ?? 0) + 1
             projSeen[base] = n
             let display = n > 1 ? "\(base) #\(n)" : base
             let id = "claude:" + c.stem            // unique & stable per session file
-            let (waiting, flash) = attentionState(id: id, rawWaiting: rawWaiting, ago: ago)
-            let working = !rawWaiting && ago < 90
+            // The file stem IS the session id, so live state maps straight onto this
+            // card — no need to pick one "representative" session the way a
+            // single-column layout would.
+            let live = liveStates[c.stem]
+            let waiting: Bool, flash: Bool, working: Bool
+            var waitingFor: String?
+
+            if live?.isBlocked == true {
+                // Blocked on you mid-turn. Actionable, so it keeps flashing until
+                // answered rather than pulsing for 10s and going quiet.
+                working = false
+                waitingFor = live?.waitingFor
+                (waiting, flash) = attentionState(id: id, rawWaiting: true, ago: ago,
+                                                  persistent: true)
+            } else {
+                switch live?.status {
+                case "waiting":
+                    // Blocked, but you've left it sitting past the staleness bound —
+                    // show the state, stop nagging.
+                    working = false
+                    waitingFor = live?.waitingFor
+                    waiting = attentionState(id: id, rawWaiting: true, ago: ago,
+                                             persistent: true).waiting
+                    flash = false
+                case "busy", "shell":
+                    working = true
+                    (waiting, flash) = attentionState(id: id, rawWaiting: false, ago: ago)
+                case "idle":
+                    // Turn ended, Claude awaits your next prompt → the done-flash.
+                    working = false
+                    (waiting, flash) = attentionState(id: id, rawWaiting: true, ago: ago)
+                default:
+                    // No live record (CLI exited, or a build that doesn't publish one)
+                    // — fall back to inferring from the transcript tail as before.
+                    (waiting, flash) = attentionState(id: id, rawWaiting: rawWaiting, ago: ago)
+                    working = !rawWaiting && ago < 90
+                }
+            }
             entries.append(AgentEntry(
                 kind: .claude, id: id, project: display, message: message,
                 secondsSinceActive: ago, waiting: waiting, flash: flash, isWorking: working,
-                stepCurrent: step?.current, stepTotal: step?.total, stepText: step?.text))
+                stepCurrent: step?.current, stepTotal: step?.total, stepText: step?.text,
+                waitingFor: waitingFor, model: model))
         }
         return (entries, claudeInput + claudeOutput, true)
     }
 
-    private func accumulateClaudeLine(_ line: String) {
-        guard let obj = parseJSON(line),
+    // MARK: - Claude live session state
+
+    /// What Claude Code publishes about a running session in
+    /// `~/.claude/sessions/<pid>.json`. `status` is one of busy / shell / idle /
+    /// waiting; `waitingFor` explains a `waiting` — "permission prompt",
+    /// "input needed", "dialog open", "sandbox request", "worker request".
+    private struct ClaudeSessionState {
+        let status: String
+        let waitingFor: String?
+        let statusUpdatedAt: Date?
+
+        /// Blocked on the user, and recently enough to still be worth surfacing.
+        /// The staleness bound matches the transcript path: a prompt you walked away
+        /// from an hour ago must not pin a card or flash forever.
+        var isBlocked: Bool {
+            guard status == "waiting" else { return false }
+            guard let at = statusUpdatedAt else { return true }
+            return Date().timeIntervalSince(at) < 900
+        }
+    }
+
+    /// sessionId → live state, for sessions whose CLI process is still alive.
+    /// A handful of small JSON files, so this is re-read each tick rather than cached.
+    private func claudeSessionStates() -> [String: ClaudeSessionState] {
+        let dir = home + "/.claude/sessions"
+        var out: [String: ClaudeSessionState] = [:]
+        for file in (try? fm.contentsOfDirectory(atPath: dir)) ?? [] {
+            guard file.hasSuffix(".json"),
+                  let data = fm.contents(atPath: dir + "/" + file),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let sid = obj["sessionId"] as? String,
+                  let status = obj["status"] as? String
+            else { continue }
+            // Ignore records orphaned by a crashed CLI — their last-written status
+            // would otherwise pin the card to "working" or "waiting" forever.
+            if let pid = (obj["pid"] as? NSNumber)?.int32Value,
+               kill(pid, 0) != 0, errno == ESRCH { continue }
+            // statusUpdatedAt is epoch milliseconds
+            let updated = (obj["statusUpdatedAt"] as? NSNumber)
+                .map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
+            out[sid] = ClaudeSessionState(status: status,
+                                          waitingFor: obj["waitingFor"] as? String,
+                                          statusUpdatedAt: updated)
+        }
+        return out
+    }
+
+    private func accumulateClaudeLine(_ line: String) {        guard let obj = parseJSON(line),
               obj["type"] as? String == "assistant",
               let ts = obj["timestamp"] as? String, ts >= todayStartISO,
               let msg = obj["message"] as? [String: Any],
@@ -263,8 +362,9 @@ final class AgentUsageCollector: @unchecked Sendable {
     ///   user-typed message   → user already responded → false
     private func claudeActivity(path: String)
         -> (project: String?, activity: String?, attention: Bool,
-            step: (current: Int, total: Int, text: String)?) {
+            step: (current: Int, total: Int, text: String)?, model: String?) {
         var project: String?
+        var model: String?
         var message: String?
         var attention = false
         var stateDetermined = false
@@ -300,6 +400,9 @@ final class AgentUsageCollector: @unchecked Sendable {
             if project == nil, let cwd = obj["cwd"] as? String {
                 project = (cwd as NSString).lastPathComponent
             }
+            // Scanning newest-first, so the first hit is the current model and
+            // reflects a mid-session /model switch. Free — this line is already parsed.
+            if model == nil, let m = msg["model"] as? String { model = m }
             var sawToolUse = false
             if let content = msg["content"] as? [[String: Any]] {
                 for block in content {
@@ -334,7 +437,7 @@ final class AgentUsageCollector: @unchecked Sendable {
             // or can no longer appear (we've passed the current user turn)
             if message != nil && stateDetermined && (step != nil || crossedUserTurn) { break }
         }
-        return (project, message, attention, step)
+        return (project, message, attention, step, model)
     }
 
     /// A real user request, as opposed to a tool_result the harness feeds back mid-turn.
@@ -427,10 +530,31 @@ final class AgentUsageCollector: @unchecked Sendable {
             entries.append(AgentEntry(
                 kind: .codex, id: id, project: proj, message: message,
                 secondsSinceActive: ago, waiting: waiting, flash: flash, isWorking: working,
-                stepCurrent: step?.current, stepTotal: step?.total, stepText: step?.text))
+                stepCurrent: step?.current, stepTotal: step?.total, stepText: step?.text,
+                model: codexModel(path: f.path)))
         }
         let q = codexQuotaCache
         return (entries, codexInput + codexOutput, true, q?.used, q?.resets)
+    }
+
+    /// Last known model per session file. `codexActivity` stops as soon as it has the
+    /// message and state, which is usually well short of the newest `turn_context`, so
+    /// the model needs its own targeted lookup — and the cache keeps the label stable
+    /// on a tick where that lookup comes up empty.
+    private var codexModelCache: [String: String] = [:]
+
+    /// Active model, from the newest `turn_context` record (written once per turn).
+    /// Its discriminator lives at the top level, not inside `payload`.
+    private func codexModel(path: String) -> String? {
+        if let line = lastLine(path: path, containing: "\"turn_context\"",
+                               maxScan: 512 * 1024),
+           let obj = parseJSON(line),
+           obj["type"] as? String == "turn_context",
+           let payload = obj["payload"] as? [String: Any],
+           let m = payload["model"] as? String {
+            codexModelCache[path] = m
+        }
+        return codexModelCache[path]
     }
 
     /// Active `update_plan` → (currentStep, totalSteps, stepText), or nil.
@@ -521,25 +645,25 @@ final class AgentUsageCollector: @unchecked Sendable {
                 guard let attrs = try? fm.attributesOfItem(atPath: path),
                       let mtime = attrs[.modificationDate] as? Date, mtime >= cutoff
                 else { continue }
-                // First (newest) populated reading in this file; update global if newer
-                for line in tailLines(path: path, maxBytes: 16 * 1024 * 1024).reversed() {
-                    guard line.contains("used_percent"),
-                          let obj = parseJSON(line),
-                          let ts = obj["timestamp"] as? String,
-                          let payload = obj["payload"] as? [String: Any],
-                          let limits = payload["rate_limits"] as? [String: Any],
-                          let primary = limits["primary"] as? [String: Any],
-                          let used = (primary["used_percent"] as? NSNumber)?.doubleValue
-                    else { continue }
-                    if ts > codexQuotaTS {
-                        codexQuotaTS = ts
-                        var resets: Date?
-                        if let r = (primary["resets_at"] as? NSNumber)?.doubleValue {
-                            resets = Date(timeIntervalSince1970: r)
-                        }
-                        codexQuotaCache = (used, resets)
+                // Newest populated reading in this file; update global if newer.
+                // The rate-limit record sits within a few hundred KB of EOF, so scan
+                // backwards for it rather than materialising the whole transcript —
+                // these files reach ~9 MB and this ran every 20s over four days of
+                // them.
+                if let line = lastLine(path: path, containing: "used_percent"),
+                   let obj = parseJSON(line),
+                   let ts = obj["timestamp"] as? String,
+                   let payload = obj["payload"] as? [String: Any],
+                   let limits = payload["rate_limits"] as? [String: Any],
+                   let primary = limits["primary"] as? [String: Any],
+                   let used = (primary["used_percent"] as? NSNumber)?.doubleValue,
+                   ts > codexQuotaTS {
+                    codexQuotaTS = ts
+                    var resets: Date?
+                    if let r = (primary["resets_at"] as? NSNumber)?.doubleValue {
+                        resets = Date(timeIntervalSince1970: r)
                     }
-                    break  // done with this file; other files may still be newer
+                    codexQuotaCache = (used, resets)
                 }
             }
         }
@@ -710,6 +834,57 @@ final class AgentUsageCollector: @unchecked Sendable {
         return data.split(separator: UInt8(ascii: "\n")).compactMap {
             String(data: Data($0), encoding: .utf8)
         }
+    }
+
+    /// Newest line containing `needle`, found by scanning backwards from EOF in
+    /// `chunk`-sized windows. For a needle that reliably sits near the end of a
+    /// multi-megabyte transcript this beats reading the whole tail: it stops at the
+    /// first window that has a hit instead of materialising every line first.
+    private func lastLine(path: String, containing needle: String,
+                          chunk: Int = 256 * 1024,
+                          maxScan: Int = 4 * 1024 * 1024) -> String? {
+        guard let fh = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? fh.close() }
+        let size = (try? fh.seekToEnd()) ?? 0
+        guard size > 0 else { return nil }
+
+        var end = size                      // exclusive upper bound of the window
+        var scanned = 0
+        // Carry the partial line at the window's start into the next (earlier)
+        // window, so a line straddling a chunk boundary is never split.
+        var carry = Data()
+
+        while end > 0 && scanned < maxScan {
+            let start = end > UInt64(chunk) ? end - UInt64(chunk) : 0
+            try? fh.seek(toOffset: start)
+            guard var data = try? fh.read(upToCount: Int(end - start)), !data.isEmpty
+            else { return nil }
+            data.append(carry)
+            scanned += Int(end - start)
+
+            // Everything before the first newline is a partial line — defer it.
+            let bodyStart: Data.Index
+            if start == 0 {
+                bodyStart = data.startIndex
+                carry = Data()
+            } else if let firstNL = data.firstIndex(of: UInt8(ascii: "\n")) {
+                bodyStart = data.index(after: firstNL)
+                carry = data[data.startIndex..<firstNL]
+            } else {
+                carry = data          // no newline at all — keep growing the carry
+                end = start
+                continue
+            }
+
+            for chunkLine in data[bodyStart...].split(separator: UInt8(ascii: "\n")).reversed() {
+                guard let line = String(data: Data(chunkLine), encoding: .utf8),
+                      line.contains(needle)
+                else { continue }
+                return line
+            }
+            end = start
+        }
+        return nil
     }
 
     private func parseJSON(_ s: String) -> [String: Any]? {

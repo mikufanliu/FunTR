@@ -215,9 +215,17 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
         NotificationCenter.default.addObserver(
             forName: .deviceStateChanged, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.updateIcon()
-            self?.updateMenuItems()
-            self?.updatePreviewForConnection()
+            // `queue: .main` already guarantees this body runs on the main thread,
+            // but the observer closure's type is nonisolated, so the compiler has no
+            // way to see that. Assert it rather than hopping through
+            // `Task { @MainActor }` — the point of this observer is to repaint the
+            // icon the instant the device state flips, and a hop would let a frame
+            // render against the stale state first.
+            MainActor.assumeIsolated {
+                self?.updateIcon()
+                self?.updateMenuItems()
+                self?.updatePreviewForConnection()
+            }
         }
 
         // Start engine
@@ -227,11 +235,18 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
         let dnc = DistributedNotificationCenter.default()
         dnc.addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) {
             [weak self] _ in
-            guard let self, self.appState.screensaverEnabled else { return }
-            self.appState.setScreensaver(true)
+            // Same nonisolated-closure story as the .deviceStateChanged observer
+            // above: `queue: .main` runs this on the main thread, but the closure
+            // type doesn't say so. Assert rather than hop — the screensaver should
+            // take over the moment the screen locks.
+            MainActor.assumeIsolated {
+                guard let self, self.appState.screensaverEnabled else { return }
+                self.appState.setScreensaver(true)
+            }
         }
         dnc.addObserver(forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: .main) {
-            [weak self] _ in self?.appState.setScreensaver(false)
+            [weak self] _ in
+            MainActor.assumeIsolated { self?.appState.setScreensaver(false) }
         }
 
         // No LCD after the initial connect attempt → fall back to on-Mac preview.

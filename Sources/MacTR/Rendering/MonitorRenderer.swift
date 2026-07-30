@@ -81,7 +81,8 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             AgentEntry(kind: e.kind, id: e.id, project: e.project, message: e.message,
                        secondsSinceActive: e.secondsSinceActive, waiting: true, flash: true,
                        isWorking: false, stepCurrent: e.stepCurrent,
-                       stepTotal: e.stepTotal, stepText: e.stepText)
+                       stepTotal: e.stepTotal, stepText: e.stepText,
+                       waitingFor: e.waitingFor, model: e.model)
         }
         return AgentsSnapshot(entries: flashed,
                               claudeAvailable: s.claudeAvailable, codexAvailable: s.codexAvailable,
@@ -145,26 +146,35 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         log("[Metrics] Loop started on metricsQueue")
         var slowTick = 0
         while metricsRunning {
-            // Fast metrics every tick
-            let cpu = collector.collectCPU()
-            let mem = collector.collectMemory()
-            let net = collector.collectNetwork()
-            let audio = AudioService.isPlaying()
-            pinService.refresh()
-            lock.lock()
-            _cpu = cpu; _mem = mem; _net = net; _audioPlaying = audio
-            lock.unlock()
-
-            // Slow metrics every 4th tick (~2s)
-            slowTick += 1
-            if slowTick >= 4 {
-                let temp = collector.collectTemperature()
-                let agents = agentCollector.collect()
-                let sys = collector.collectSystem()
+            // This loop is a single never-returning GCD work item, so its implicit
+            // autorelease pool is never drained. Everything autoreleased below —
+            // JSONSerialization's NSDictionary/CFString graphs, attributesOfItem
+            // dictionaries, FileHandle's NSData buffers — would otherwise accumulate
+            // for the life of this always-on app. The frame loop already drains per
+            // frame for the same reason. Sleep stays outside so the pool is empty
+            // while we idle.
+            autoreleasepool {
+                // Fast metrics every tick
+                let cpu = collector.collectCPU()
+                let mem = collector.collectMemory()
+                let net = collector.collectNetwork()
+                let audio = AudioService.isPlaying()
+                pinService.refresh()
                 lock.lock()
-                _temp = temp; _agents = agents; _sys = sys
+                _cpu = cpu; _mem = mem; _net = net; _audioPlaying = audio
                 lock.unlock()
-                slowTick = 0
+
+                // Slow metrics every 4th tick (~2s)
+                slowTick += 1
+                if slowTick >= 4 {
+                    let temp = collector.collectTemperature()
+                    let agents = agentCollector.collect()
+                    let sys = collector.collectSystem()
+                    lock.lock()
+                    _temp = temp; _agents = agents; _sys = sys
+                    lock.unlock()
+                    slowTick = 0
+                }
             }
 
             Thread.sleep(forTimeInterval: 0.5)
@@ -1163,6 +1173,41 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         return "\(s / 86400)d 前"
     }
 
+    /// Model id → a label that fits the panel:
+    ///   claude-haiku-4-5-20251001  → Haiku 4.5
+    ///   bapi_codex/gpt-5.6-sol     → GPT-5.6-sol
+    /// Anything unrecognised falls through as-is (minus the provider prefix), so a
+    /// new model shows up as its raw id rather than disappearing.
+    private func shortModel(_ id: String) -> String {
+        // Strip a provider prefix like "bapi_codex/"
+        let bare = id.contains("/") ? String(id.split(separator: "/").last!) : id
+
+        if bare.hasPrefix("claude-") {
+            var parts = bare.dropFirst("claude-".count).split(separator: "-").map(String.init)
+            // Drop a trailing yyyymmdd snapshot stamp
+            if let last = parts.last, last.count == 8, Int(last) != nil { parts.removeLast() }
+            guard let family = parts.first else { return bare }
+            let version = parts.dropFirst().joined(separator: ".")
+            let name = family.prefix(1).uppercased() + family.dropFirst()
+            return version.isEmpty ? name : "\(name) \(version)"
+        }
+        if bare.hasPrefix("gpt-") { return "GPT-" + bare.dropFirst(4) }
+        return bare
+    }
+
+    /// Claude Code's `waitingFor` reason → a short label matching the panel's other
+    /// Chinese captions. Unknown reasons pass through as-is.
+    private func waitingLabel(_ reason: String) -> String {
+        switch reason {
+        case "permission prompt": return "待授权"
+        case "input needed":      return "待输入"
+        case "dialog open":       return "待确认"
+        case "sandbox request":   return "沙箱授权"
+        case "worker request":    return "子进程请求"
+        default:                  return reason
+        }
+    }
+
     /// Left column: one compact row per session, sorted, focus row highlighted.
     private func renderAgentList(_ ctx: CGContext, entries: [AgentEntry], focusID: String?,
                                  x: Int, w: Int, top: Int, bottom: Int) {
@@ -1211,7 +1256,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             // Second line: status text
             let (statusText, statusCol): (String, CGColor)
             if isUrgent(e) {
-                (statusText, statusCol) = ("等你输入", Color.red)
+                (statusText, statusCol) = (e.waitingFor.map(waitingLabel) ?? "等你输入", Color.red)
             } else if e.isWorking {
                 (statusText, statusCol) = (e.stepText ?? firstLine(e.message) ?? "运行中…", Color.green)
             } else {
@@ -1243,8 +1288,21 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
                   font: agoF, color: agoActive ? Color.green : Color.textD)
         let title = "\(e.kind.rawValue) · \(e.project ?? "—")"
         let tF = Fonts.system(27, weight: .bold)
-        Draw.text(ctx, truncate(title, font: tF, maxW: CGFloat(w) - agoW - 16),
-                  x: x, y: y, font: tF, color: accent)
+        let titleMaxW = CGFloat(w) - agoW - 16
+        let shownTitle = truncate(title, font: tF, maxW: titleMaxW)
+        Draw.text(ctx, shownTitle, x: x, y: y, font: tF, color: accent)
+        // Model id trails the project name as dim metadata. It shares the title's
+        // cursor and only draws in whatever the title left over, so a long project
+        // name squeezes it out rather than overlapping the "N分钟前" on the right.
+        if let m = e.model {
+            let titleW = (shownTitle as NSString).size(withAttributes: [.font: tF]).width
+            let mF = Fonts.system(17, weight: .medium)
+            let avail = titleMaxW - titleW - 10
+            if avail > 40 {
+                Draw.text(ctx, truncate(shortModel(m), font: mF, maxW: avail),
+                          x: x + Int(titleW) + 10, y: y + 9, font: mF, color: Color.textD)
+            }
+        }
         y += 42
 
         // Waiting badge (blinking) — the reason it was auto-focused
@@ -1253,7 +1311,8 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             let c = Color.red.copy(alpha: on ? 1 : 0.4) ?? Color.red
             ctx.setFillColor(c)
             ctx.fillEllipse(in: CGRect(x: CGFloat(x), y: CGFloat(y + 3), width: 13, height: 13))
-            Draw.text(ctx, "等你输入 / 需确认", x: x + 22, y: y,
+            Draw.text(ctx, e.waitingFor.map(waitingLabel) ?? "等你输入 / 需确认",
+                      x: x + 22, y: y,
                       font: Fonts.system(20, weight: .semibold), color: Color.red)
             y += 34
         }
@@ -1363,26 +1422,47 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let proseFont = Fonts.system(19)
         let lineH = 26
         var cy = y
+        // Trim once up front: this runs every frame, and the loop below used to
+        // re-trim the same lines several times over.
         let raw = text.components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+
+        // reserve[j] = lines the blocks from j onward need at minimum, so a long
+        // paragraph can be told how much room it must leave for its successors.
+        // Table rows want one line each; anything else gets the 2-line floor every
+        // prose block is guaranteed. Computed as a suffix sum so the layout stays
+        // linear in the number of lines.
+        var reserve = [Int](repeating: 0, count: raw.count + 1)
+        for j in stride(from: raw.count - 1, through: 0, by: -1) {
+            let cost = raw[j].isEmpty ? 0 : (isTableLine(raw[j]) ? 1 : 2)
+            reserve[j] = reserve[j + 1] + cost
+        }
+
         var i = 0
         while i < raw.count && cy + 20 <= bottom {
-            let line = raw[i].trimmingCharacters(in: .whitespaces)
+            let line = raw[i]
             if line.isEmpty { i += 1; continue }
 
             if isTableLine(line) {
                 // Consume the contiguous run of table rows and render as a grid
                 var block: [String] = []
-                while i < raw.count && isTableLine(raw[i].trimmingCharacters(in: .whitespaces)) {
-                    block.append(raw[i].trimmingCharacters(in: .whitespaces))
+                while i < raw.count && isTableLine(raw[i]) {
+                    block.append(raw[i])
                     i += 1
                 }
                 cy = renderTable(ctx, rows: block, x: x, y: cy, w: w, bottom: bottom, accent: accent)
             } else {
-                // Prose / bullet — wrap, but cap each block so a table below still fits
+                // Prose / bullet — wrap, capped so this block cannot crowd out what
+                // follows (typically a markdown table). Budget against what actually
+                // comes next rather than a flat 2 lines: an agent mid-turn usually
+                // writes one long unbroken paragraph, and the flat cap rendered two
+                // lines of it and left the rest of the column blank. With nothing
+                // after it, a paragraph may use the whole panel.
                 let remaining = (bottom - cy) / lineH
                 guard remaining > 0 else { break }
+                let cap = max(2, remaining - reserve[i + 1])
                 let wrapped = wrap(stripMarkdown(line), font: proseFont,
-                                   maxW: CGFloat(w), maxLines: min(2, remaining))
+                                   maxW: CGFloat(w), maxLines: min(cap, remaining))
                 for wl in wrapped {
                     if cy + lineH > bottom { break }
                     Draw.text(ctx, wl, x: x, y: cy, font: proseFont, color: Color.textS)
