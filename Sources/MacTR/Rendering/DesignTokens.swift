@@ -36,9 +36,12 @@ struct Palette {
         claude: rgb(217, 119, 87), barBG: rgb(30, 34, 48))
 
     /// 初音未来 — teal (#39C5BB) primary, magenta/pink secondary, digital-diva.
+    /// The ground is deliberately a saturated deep teal rather than a near-black with
+    /// a hint of it: at low saturation the theme read as "dark dashboard" and the
+    /// signature colour only survived in the accents.
     static let miku = Palette(
-        bgTop: rgb(6, 16, 18), bgBot: rgb(9, 24, 27),
-        panelBG: rgb(12, 30, 33, 0.96), border: rgb(30, 74, 78),
+        bgTop: rgb(4, 26, 33), bgBot: rgb(7, 42, 51),
+        panelBG: rgb(8, 34, 42, 0.94), border: rgb(46, 112, 118),
         textW: rgb(228, 250, 249), textS: rgb(132, 190, 190),
         textL: rgb(92, 146, 148), textD: rgb(58, 100, 102),
         blue: rgb(74, 184, 232), blueD: rgb(20, 70, 96),
@@ -48,7 +51,7 @@ struct Palette {
         purple: rgb(255, 120, 180), purpleD: rgb(96, 40, 68),   // agents panel → Miku pink
         cyan: rgb(57, 197, 187), cyanD: rgb(16, 78, 74),        // signature teal
         magenta: rgb(255, 109, 168), magentaD: rgb(110, 34, 72),
-        claude: rgb(230, 138, 108), barBG: rgb(15, 38, 41))
+        claude: rgb(230, 138, 108), barBG: rgb(14, 52, 60))
 
     /// 罗德岛 — near-black terminal, amber (#FFB13B) + cyan, Rhodes Island HUD.
     static let rhodes = Palette(

@@ -88,15 +88,30 @@ enum Draw {
         return img
     }
 
-    /// Piano-roll rules: beat lines with every 4th accented (4/4 bars) plus the
-    /// horizontal note lanes. Vocaloid is a DAW, so the sequencer grid is the motif.
+    /// Piano-roll rules: beat lines with every 4th accented (4/4 bars), note lanes, and
+    /// black-key lanes shaded darker — the shading is what actually makes a grid read as
+    /// a piano roll rather than as generic graph paper.
     private static func pianoRoll(_ ctx: CGContext, w: Int, h: Int) {
         let beat: CGFloat = 24          // one beat
         let lane: CGFloat = 30          // one note lane
         let fw = CGFloat(w), fh = CGFloat(h)
 
-        // Note lanes (horizontal) — faintest layer.
-        ctx.setStrokeColor(Color.cyan.copy(alpha: 0.030) ?? Color.cyan)
+        // Black-key lanes, in the semitone pattern of a keyboard (C# D# / F# G# A#).
+        // Drawn first so the rules sit on top.
+        let blackKeys: Set<Int> = [1, 3, 6, 8, 10]
+        ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.16))
+        var laneIndex = 0
+        var ly: CGFloat = 0
+        while ly < fh {
+            if blackKeys.contains(laneIndex % 12) {
+                ctx.fill(CGRect(x: 0, y: ly, width: fw, height: lane))
+            }
+            ly += lane
+            laneIndex += 1
+        }
+
+        // Note lanes (horizontal).
+        ctx.setStrokeColor(Color.cyan.copy(alpha: 0.055) ?? Color.cyan)
         ctx.setLineWidth(1)
         var y: CGFloat = 0
         while y <= fh {
@@ -106,7 +121,7 @@ enum Draw {
         ctx.strokePath()
 
         // Off-beat lines.
-        ctx.setStrokeColor(Color.cyan.copy(alpha: 0.035) ?? Color.cyan)
+        ctx.setStrokeColor(Color.cyan.copy(alpha: 0.055) ?? Color.cyan)
         ctx.setLineWidth(1)
         var x: CGFloat = 0
         var i = 0
@@ -119,7 +134,7 @@ enum Draw {
         ctx.strokePath()
 
         // Bar lines (every 4th beat) — brighter, so the grid reads as 4/4 time.
-        ctx.setStrokeColor(Color.cyan.copy(alpha: 0.065) ?? Color.cyan)
+        ctx.setStrokeColor(Color.cyan.copy(alpha: 0.13) ?? Color.cyan)
         ctx.setLineWidth(1)
         x = 0; i = 0
         while x <= fw {
@@ -135,7 +150,7 @@ enum Draw {
     /// near-invisible: dense text under the dashboard's own text would hurt reading.
     private static func binaryTexture(_ ctx: CGContext, w: Int, h: Int) {
         let font = Fonts.mono(13)
-        let color = Color.cyan.copy(alpha: 0.038) ?? Color.cyan
+        let color = Color.cyan.copy(alpha: 0.055) ?? Color.cyan
         // A fixed pattern, offset per row, so it reads as data rather than noise.
         let bits = "0100110101001011010101100011100101001101"
         let rowH = 30
