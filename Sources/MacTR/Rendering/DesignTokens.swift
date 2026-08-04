@@ -126,6 +126,47 @@ enum ThemeKind: String, CaseIterable, Sendable {
     case rhodes = "罗德岛"
 }
 
+/// A themed glyph, baked from generated art (see `MikuGlyphAsset`).
+enum MikuGlyph: Sendable {
+    case leek           // 大葱 — the Levan Polkka prop
+    case headphones     // her red/grey headset
+    case note           // 8th note
+    case badge01        // the 01 on her shoulder
+    case badge39        // 39 — ミク / "thank you"
+}
+
+/// Theme-specific ornament, on top of the palette. The palette recolors the
+/// dashboard; `Decor` changes what actually gets *drawn*, so a theme can carry its
+/// own motifs instead of only its own colors. `.none` reproduces the original
+/// drawing exactly, which is what classic and rhodes use.
+struct Decor: Sendable {
+    /// Backdrop texture under the gradient. `.grid` is rhodes' existing faint grid
+    /// (still driven by `Theme.gridBackground`); `.pianoRoll` is the DAW motif.
+    enum Backdrop: Sendable { case plain, pianoRoll }
+    enum Divider: Sendable { case straight, waveform }
+    enum Gauge: Sendable { case plain, headphone }
+    enum Segment: Sendable { case plain, noteHead }
+
+    let backdrop: Backdrop
+    let binaryRain: Bool          // faint 01 texture over the backdrop
+    let divider: Divider
+    let gauge: Gauge
+    let segment: Segment
+    let headerGlyph: MikuGlyph?   // small icon before a panel title
+    let cornerGlyph: MikuGlyph?   // corner easter egg
+
+    /// No ornament — the original drawing, unchanged.
+    static let none = Decor(backdrop: .plain, binaryRain: false, divider: .straight,
+                            gauge: .plain, segment: .plain,
+                            headerGlyph: nil, cornerGlyph: nil)
+
+    /// Vocaloid kit: piano-roll backdrop, waveform rules, headphone gauges,
+    /// note-head bars, a leek in the corner.
+    static let miku = Decor(backdrop: .pianoRoll, binaryRain: true, divider: .waveform,
+                            gauge: .headphone, segment: .noteHead,
+                            headerGlyph: .note, cornerGlyph: .leek)
+}
+
 /// A theme = a palette + style switches the drawing primitives read. Swapping
 /// `Theme.current` reskins the whole dashboard (colors, panel frames, backdrop).
 struct Theme {
@@ -136,16 +177,17 @@ struct Theme {
     let scanlines: Bool         // faint CRT scanline overlay on the backdrop
     let gridBackground: Bool    // faint grid on the backdrop
     let accentGlow: Bool        // glow under each panel's header bar
+    let decor: Decor            // themed motifs (see Decor)
 
     static let classic = Theme(kind: .classic, palette: .classic, sharpCorners: false,
                                cornerBrackets: false, scanlines: false,
-                               gridBackground: false, accentGlow: true)
+                               gridBackground: false, accentGlow: true, decor: .none)
     static let miku = Theme(kind: .miku, palette: .miku, sharpCorners: false,
                             cornerBrackets: true, scanlines: true,
-                            gridBackground: false, accentGlow: true)
+                            gridBackground: false, accentGlow: true, decor: .miku)
     static let rhodes = Theme(kind: .rhodes, palette: .rhodes, sharpCorners: true,
                               cornerBrackets: true, scanlines: true,
-                              gridBackground: true, accentGlow: true)
+                              gridBackground: true, accentGlow: true, decor: .none)
 
     static func of(_ kind: ThemeKind) -> Theme {
         switch kind {

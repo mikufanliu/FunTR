@@ -554,7 +554,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let dividerY = py + ph - 116
         let cx0 = x + 16
         let cw = pw - 32
-        Draw.line(ctx, from: CGPoint(x: cx0, y: dividerY),
+        Draw.rule(ctx, from: CGPoint(x: cx0, y: dividerY),
                   to: CGPoint(x: cx0 + cw, y: dividerY), color: Color.border)
 
         // Bongo cat sits on the left, tapping the divider when an agent is busy
@@ -609,8 +609,8 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let accent = Color.cyan
         let cx = x + pw / 2
         Draw.panel(ctx, x: x, y: py, w: pw, h: ph, accent: accent)
-        Draw.text(ctx, "STATUS", x: x + 20, y: py + 14,
-                  font: Fonts.system(20, weight: .bold), color: accent)
+        panelTitle(ctx, "STATUS", x: x + 20, y: py + 14,
+                   font: Fonts.system(20, weight: .bold), color: accent)
 
         // ── Zone 1: time hero — HH:MM heavy, :SS smaller & accented ──
         let df = DateFormatter()
@@ -815,8 +815,8 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let accent = Color.cyan
 
         Draw.panel(ctx, x: x, y: py, w: pw, h: ph, accent: accent)
-        Draw.text(ctx, "SKADI", x: x + 20, y: py + 14,
-                  font: Fonts.system(24, weight: .bold), color: accent)
+        panelTitle(ctx, "SKADI", x: x + 20, y: py + 14,
+                   font: Fonts.system(24, weight: .bold), color: accent)
         let status: String
         let statusColor: CGColor
         if busy { status = "作战中"; statusColor = Color.green }
@@ -1107,9 +1107,9 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let focus = sorted.first
 
         // Header + live count
-        Draw.text(ctx, "AI AGENTS", x: x + 20, y: py + 14,
-                  font: Fonts.system(24, weight: .bold),
-                  color: waiting ? Color.red : Color.purple)
+        panelTitle(ctx, "AI AGENTS", x: x + 20, y: py + 14,
+                   font: Fonts.system(24, weight: .bold),
+                   color: waiting ? Color.red : Color.purple)
         let live = agents.entries.filter { $0.isWorking || $0.waiting }.count
         let sub = "\(agents.entries.count) 会话 · \(live) 活跃"
         let subF = Fonts.system(16, weight: .medium)
@@ -1125,7 +1125,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let detailX = x + listW + 20
         let detailW = pw - listW - 40
 
-        Draw.line(ctx, from: CGPoint(x: detailX - 12, y: contentTop),
+        Draw.rule(ctx, from: CGPoint(x: detailX - 12, y: contentTop),
                   to: CGPoint(x: detailX - 12, y: contentBottom), color: Color.border)
 
         renderAgentList(ctx, entries: sorted, focusID: focus?.id, x: x + 20,
@@ -1206,6 +1206,21 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         case "worker request":    return "子进程请求"
         default:                  return reason
         }
+    }
+
+    /// A panel title, preceded by the theme's header glyph when it has one. The title
+    /// only shifts right if a glyph was actually drawn, so themes without one keep the
+    /// original position exactly.
+    private func panelTitle(_ ctx: CGContext, _ title: String, x: Int, y: Int,
+                            font: NSFont, color: CGColor) {
+        var tx = x
+        if let g = Theme.current.decor.headerGlyph {
+            let s = font.pointSize
+            Draw.glyph(ctx, g, in: CGRect(x: CGFloat(x), y: CGFloat(y) + 3,
+                                          width: s, height: s), color: color)
+            tx += Int(s) + 7
+        }
+        Draw.text(ctx, title, x: tx, y: y, font: font, color: color)
     }
 
     /// Left column: one compact row per session, sorted, focus row highlighted.
@@ -1340,7 +1355,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     /// Slim footer: today's aggregate token + Codex quota (token intentionally demoted).
     private func renderAgentFooter(_ ctx: CGContext, agents: AgentsSnapshot,
                                    x: Int, w: Int, y: Int) {
-        Draw.line(ctx, from: CGPoint(x: x, y: y - 8),
+        Draw.rule(ctx, from: CGPoint(x: x, y: y - 8),
                   to: CGPoint(x: x + w, y: y - 8), color: Color.border)
 
         // Right: today's token + quota summary (right-aligned).
@@ -1396,6 +1411,11 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             ctx.setFillColor(color)
             ctx.addPath(CGPath(roundedRect: rect, cornerWidth: 3, cornerHeight: 3, transform: nil))
             ctx.fillPath()
+
+            // Mark the active step with a note head — a playhead on the sequencer.
+            if i == current - 1, Theme.current.decor.segment == .noteHead {
+                Draw.noteMarker(ctx, atX: rect.maxX, midY: rect.midY, scale: 11, color: accent)
+            }
         }
     }
 

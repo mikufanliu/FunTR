@@ -50,6 +50,250 @@ enum Draw {
             while sy <= h { ctx.move(to: CGPoint(x: 0, y: sy)); ctx.addLine(to: CGPoint(x: w, y: sy)); sy += 3 }
             ctx.strokePath()
         }
+
+        // Heavier themed motifs (piano roll + binary) come from a cached bitmap: they
+        // are hundreds of lines and glyphs, and this runs up to 15x/second.
+        if let motif = motifOverlay(for: theme) {
+            ctx.draw(motif, in: CGRect(x: 0, y: 0, width: w, height: h))
+        }
+    }
+
+    // MARK: - Themed backdrop motifs (cached)
+
+    /// Rendered-once overlay per theme. Drawing the piano-roll rules and the 01 text
+    /// rows costs hundreds of path/glyph operations; at up to 15fps for an always-on
+    /// app that is pure waste, so bake it into one bitmap and blit that instead.
+    /// Keyed by `ThemeKind` — the palette is fixed per kind, so one entry each.
+    nonisolated(unsafe) private static var motifCache: [ThemeKind: CGImage] = [:]
+
+    private static func motifOverlay(for theme: Theme) -> CGImage? {
+        let decor = theme.decor
+        guard decor.backdrop != .plain || decor.binaryRain else { return nil }
+        if let cached = motifCache[theme.kind] { return cached }
+
+        let w = Layout.width, h = Layout.height
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        // Match the flipped convention every other draw call here uses.
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: 1, y: -1)
+
+        if decor.backdrop == .pianoRoll { pianoRoll(ctx, w: w, h: h) }
+        if decor.binaryRain { binaryTexture(ctx, w: w, h: h) }
+
+        let img = ctx.makeImage()
+        if let img { motifCache[theme.kind] = img }
+        return img
+    }
+
+    /// Piano-roll rules: beat lines with every 4th accented (4/4 bars) plus the
+    /// horizontal note lanes. Vocaloid is a DAW, so the sequencer grid is the motif.
+    private static func pianoRoll(_ ctx: CGContext, w: Int, h: Int) {
+        let beat: CGFloat = 24          // one beat
+        let lane: CGFloat = 30          // one note lane
+        let fw = CGFloat(w), fh = CGFloat(h)
+
+        // Note lanes (horizontal) — faintest layer.
+        ctx.setStrokeColor(Color.cyan.copy(alpha: 0.030) ?? Color.cyan)
+        ctx.setLineWidth(1)
+        var y: CGFloat = 0
+        while y <= fh {
+            ctx.move(to: CGPoint(x: 0, y: y)); ctx.addLine(to: CGPoint(x: fw, y: y))
+            y += lane
+        }
+        ctx.strokePath()
+
+        // Off-beat lines.
+        ctx.setStrokeColor(Color.cyan.copy(alpha: 0.035) ?? Color.cyan)
+        ctx.setLineWidth(1)
+        var x: CGFloat = 0
+        var i = 0
+        while x <= fw {
+            if i % 4 != 0 {
+                ctx.move(to: CGPoint(x: x, y: 0)); ctx.addLine(to: CGPoint(x: x, y: fh))
+            }
+            x += beat; i += 1
+        }
+        ctx.strokePath()
+
+        // Bar lines (every 4th beat) — brighter, so the grid reads as 4/4 time.
+        ctx.setStrokeColor(Color.cyan.copy(alpha: 0.065) ?? Color.cyan)
+        ctx.setLineWidth(1)
+        x = 0; i = 0
+        while x <= fw {
+            if i % 4 == 0 {
+                ctx.move(to: CGPoint(x: x, y: 0)); ctx.addLine(to: CGPoint(x: x, y: fh))
+            }
+            x += beat; i += 1
+        }
+        ctx.strokePath()
+    }
+
+    /// Faint `01` rows — her shoulder number, and the "digital diva" texture. Kept
+    /// near-invisible: dense text under the dashboard's own text would hurt reading.
+    private static func binaryTexture(_ ctx: CGContext, w: Int, h: Int) {
+        let font = Fonts.mono(13)
+        let color = Color.cyan.copy(alpha: 0.038) ?? Color.cyan
+        // A fixed pattern, offset per row, so it reads as data rather than noise.
+        let bits = "0100110101001011010101100011100101001101"
+        let rowH = 30
+        var row = 0
+        var y = 4
+        while y < h {
+            // Rotate the pattern per row for variety without randomness (keeps the
+            // bitmap deterministic, which matters for the cache and for snapshots).
+            let shift = (row * 7) % bits.count
+            let rotated = String(bits.dropFirst(shift) + bits.prefix(shift))
+            text(ctx, rotated + rotated, x: (row % 3) * 40 - 40, y: y, font: font, color: color)
+            y += rowH
+            row += 1
+        }
+    }
+
+    // MARK: - Themed glyphs
+
+    /// Draw a themed glyph into `rect`, aspect-fit and centred. Prefers baked art from
+    /// `MikuGlyphAsset`; falls back to a procedural path so a theme is complete before
+    /// (or without) any generated assets.
+    static func glyph(_ ctx: CGContext, _ glyph: MikuGlyph, in rect: CGRect, color: CGColor) {
+        if let img = MikuGlyphAsset.image(for: glyph) {
+            let aspect = CGFloat(img.width) / CGFloat(img.height)
+            var w = rect.width, h = rect.height
+            if w / h > aspect { w = h * aspect } else { h = w / aspect }
+            let fit = CGRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h)
+            ctx.saveGState()
+            // Baked glyphs are drawn light-on-black and keyed to alpha, so tint by
+            // clipping to the art and filling — keeps them on-palette per theme.
+            ctx.clip(to: fit, mask: img)
+            ctx.setFillColor(color)
+            ctx.fill(fit)
+            ctx.restoreGState()
+            return
+        }
+        switch glyph {
+        case .leek:       leekPath(ctx, in: rect, color: color)
+        case .headphones: headphonesPath(ctx, in: rect, color: color)
+        case .note:       notePath(ctx, in: rect, color: color)
+        case .badge01:    badgePath(ctx, "01", in: rect, color: color)
+        case .badge39:    badgePath(ctx, "39", in: rect, color: color)
+        }
+    }
+
+    /// 大葱 — diagonal stalk with leaves splaying off the top.
+    private static func leekPath(_ ctx: CGContext, in r: CGRect, color: CGColor) {
+        let s = min(r.width, r.height)
+        ctx.saveGState()
+        ctx.translateBy(x: r.midX, y: r.midY)
+        ctx.rotate(by: 0.28)
+        ctx.setStrokeColor(color)
+        ctx.setLineCap(.round)
+        // White stalk (lower, thicker).
+        ctx.setLineWidth(max(1.6, s * 0.16))
+        ctx.move(to: CGPoint(x: 0, y: s * 0.46))
+        ctx.addLine(to: CGPoint(x: 0, y: -s * 0.04))
+        ctx.strokePath()
+        // Leaves (upper, thinner) — three splaying blades.
+        ctx.setLineWidth(max(1.2, s * 0.10))
+        for dx in [-s * 0.20, 0, s * 0.20] {
+            ctx.move(to: CGPoint(x: 0, y: -s * 0.02))
+            ctx.addLine(to: CGPoint(x: dx, y: -s * 0.46))
+        }
+        ctx.strokePath()
+        ctx.restoreGState()
+    }
+
+    /// Headset — headband arc over two earcups.
+    private static func headphonesPath(_ ctx: CGContext, in r: CGRect, color: CGColor) {
+        let s = min(r.width, r.height)
+        let cupW = s * 0.24, cupH = s * 0.40
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(max(1.4, s * 0.11))
+        ctx.setLineCap(.round)
+        // Band: half circle over the top (flipped context → negative sin is up).
+        ctx.addArc(center: CGPoint(x: r.midX, y: r.midY + s * 0.06), radius: s * 0.34,
+                   startAngle: .pi, endAngle: 2 * .pi, clockwise: false)
+        ctx.strokePath()
+        // Earcups.
+        ctx.setFillColor(color)
+        for dx in [-s * 0.34, s * 0.34] {
+            let cup = CGRect(x: r.midX + dx - cupW / 2, y: r.midY + s * 0.02,
+                             width: cupW, height: cupH)
+            ctx.addPath(CGPath(roundedRect: cup, cornerWidth: cupW / 2.4,
+                               cornerHeight: cupW / 2.4, transform: nil))
+            ctx.fillPath()
+        }
+    }
+
+    /// 8th note — reuses the bar's note head so the two motifs match.
+    private static func notePath(_ ctx: CGContext, in r: CGRect, color: CGColor) {
+        let s = min(r.width, r.height)
+        // noteHead draws the stem upward from the head, so sit the head low in rect.
+        noteHead(ctx, atX: r.midX - s * 0.10, midY: r.maxY - s * 0.22,
+                 scale: s * 0.52, color: color)
+        // Flag off the stem top.
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(max(1.2, s * 0.08))
+        ctx.setLineCap(.round)
+        let stemX = r.midX - s * 0.10 + s * 0.52 * 0.42
+        let stemTop = r.maxY - s * 0.22 - s * 0.52 * 1.15
+        ctx.move(to: CGPoint(x: stemX, y: stemTop))
+        ctx.addQuadCurve(to: CGPoint(x: stemX + s * 0.20, y: stemTop + s * 0.26),
+                         control: CGPoint(x: stemX + s * 0.24, y: stemTop + s * 0.02))
+        ctx.strokePath()
+    }
+
+    /// A small numeric badge — her shoulder `01`, or `39`.
+    private static func badgePath(_ ctx: CGContext, _ label: String,
+                                 in r: CGRect, color: CGColor) {
+        let s = min(r.width, r.height)
+        let box = CGRect(x: r.midX - s * 0.48, y: r.midY - s * 0.34,
+                         width: s * 0.96, height: s * 0.68)
+        ctx.setStrokeColor(color.copy(alpha: 0.75) ?? color)
+        ctx.setLineWidth(max(1, s * 0.06))
+        ctx.addPath(CGPath(roundedRect: box, cornerWidth: s * 0.12,
+                           cornerHeight: s * 0.12, transform: nil))
+        ctx.strokePath()
+        let font = Fonts.mono(max(7, s * 0.44))
+        let tw = (label as NSString).size(withAttributes: [.font: font]).width
+        text(ctx, label, x: Int(r.midX - tw / 2), y: Int(box.minY + s * 0.10),
+             font: font, color: color)
+    }
+
+
+    /// A rule drawn as a small audio waveform instead of a straight line. Falls back
+    /// to `line` for themes without the motif, so call sites stay single-path.
+    static func rule(_ ctx: CGContext, from: CGPoint, to: CGPoint,
+                     color: CGColor, width: CGFloat = 1) {
+        guard Theme.current.decor.divider == .waveform else {
+            line(ctx, from: from, to: to, color: color, width: width)
+            return
+        }
+        let horizontal = abs(to.x - from.x) >= abs(to.y - from.y)
+        let span = horizontal ? (to.x - from.x) : (to.y - from.y)
+        guard abs(span) > 8 else {
+            line(ctx, from: from, to: to, color: color, width: width)
+            return
+        }
+        // Envelope: a decaying sine, so it reads as a waveform rather than a ripple.
+        let amp: CGFloat = 3.0
+        let cycles: CGFloat = abs(span) / 46
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(width)
+        ctx.setLineJoin(.round)
+        let steps = max(24, Int(abs(span) / 3))
+        for s in 0...steps {
+            let t = CGFloat(s) / CGFloat(steps)
+            // Taper both ends to zero so the rule still lands exactly on from/to.
+            let taper = sin(t * .pi)
+            let off = sin(t * cycles * 2 * .pi) * amp * taper
+            let p = horizontal
+                ? CGPoint(x: from.x + span * t, y: from.y + off)
+                : CGPoint(x: from.x + off, y: from.y + span * t)
+            if s == 0 { ctx.move(to: p) } else { ctx.addLine(to: p) }
+        }
+        ctx.strokePath()
     }
 
     // MARK: - Panel
@@ -65,6 +309,19 @@ enum Draw {
         ctx.setFillColor(Color.panelBG)
         ctx.addPath(path)
         ctx.fillPath()
+
+        // The panels are ~96% opaque and cover nearly the whole screen, so a motif
+        // painted only on the backdrop would survive as slivers in the margins. Blit
+        // the cached overlay inside the panel too, clipped to its frame. It is the
+        // same screen-aligned bitmap, so the sequencer grid stays continuous across
+        // panels and reads as one surface the dashboard sits on.
+        if let motif = motifOverlay(for: theme) {
+            ctx.saveGState()
+            ctx.addPath(path)
+            ctx.clip()
+            ctx.draw(motif, in: CGRect(x: 0, y: 0, width: Layout.width, height: Layout.height))
+            ctx.restoreGState()
+        }
 
         // Hairline border for the HUD themes (adds structure over the flat fill).
         if theme.cornerBrackets || theme.sharpCorners {
@@ -112,6 +369,21 @@ enum Draw {
                 ctx.move(to: CGPoint(x: cx, y: cy)); ctx.addLine(to: CGPoint(x: cx, y: cy + s * dy))
             }
             ctx.strokePath()
+
+            // Corner easter egg — one glyph, bottom-LEFT only. `panel` is shared by
+            // every panel and knows nothing about their contents, so it has to pick
+            // the corner least likely to be occupied: the agents panel right-aligns
+            // its token footer and the status panel centres its uptime, both of which
+            // collide bottom-right. Kept small and dim so it reads as a mark, not a
+            // control.
+            if let g = theme.decor.cornerGlyph {
+                let gs: CGFloat = 15
+                // Clear of the bracket's horizontal arm (length `s` from the corner),
+                // or the two shapes overlap into an unreadable smudge.
+                Draw.glyph(ctx, g, in: CGRect(x: l + s + 6, y: bt - gs - 1,
+                                              width: gs, height: gs),
+                           color: accent.copy(alpha: 0.45) ?? accent)
+            }
         }
     }
 
@@ -160,6 +432,47 @@ enum Draw {
             ctx.fillEllipse(in: CGRect(x: ex - dotR, y: ey - dotR,
                                        width: dotR * 2, height: dotR * 2))
         }
+
+        // Headphone shell around the dial — her headset, and it frames the gauge
+        // without touching the readout in the middle.
+        if Theme.current.decor.gauge == .headphone {
+            headphoneShell(ctx, cx: cx, cy: cy, radius: radius,
+                           thickness: thickness, color: color)
+        }
+    }
+
+    /// Earcups + headband arcs outside an arc gauge. Drawn dim so the live value arc
+    /// stays the brightest thing in the panel.
+    private static func headphoneShell(
+        _ ctx: CGContext, cx: Int, cy: Int, radius: Int,
+        thickness: CGFloat, color: CGColor
+    ) {
+        let r = CGFloat(radius)
+        let center = CGPoint(x: CGFloat(cx), y: CGFloat(cy))
+        let shell = color.copy(alpha: 0.30) ?? color
+        let band = color.copy(alpha: 0.22) ?? color
+
+        // Headband: an arc over the top, outside the dial.
+        let bandR = r + thickness / 2 + 9
+        ctx.setStrokeColor(band)
+        ctx.setLineWidth(3)
+        ctx.setLineCap(.round)
+        // In the flipped context, the top of the circle is the negative-sin side, so
+        // sweep from 200° to 340° to arc over the top.
+        ctx.addArc(center: center, radius: bandR,
+                   startAngle: CGFloat(200) * .pi / 180,
+                   endAngle: CGFloat(340) * .pi / 180, clockwise: false)
+        ctx.strokePath()
+
+        // Earcups: short thick arcs on each side, at the headband's ends.
+        ctx.setStrokeColor(shell)
+        ctx.setLineWidth(7)
+        for (from, to) in [(CGFloat(168), CGFloat(212)), (CGFloat(328), CGFloat(372))] {
+            ctx.addArc(center: center, radius: bandR,
+                       startAngle: from * .pi / 180,
+                       endAngle: to * .pi / 180, clockwise: false)
+            ctx.strokePath()
+        }
     }
 
     // MARK: - Bar
@@ -185,7 +498,43 @@ enum Draw {
             ctx.setFillColor(color)
             ctx.addPath(CGPath(roundedRect: fillRect, cornerWidth: radius, cornerHeight: radius, transform: nil))
             ctx.fillPath()
+
+            // Note head at the fill's leading edge — the bar reads as a note with a
+            // stem. Only when the bar is tall enough for the head to be legible.
+            if Theme.current.decor.segment == .noteHead, h >= 8 {
+                noteHead(ctx, atX: CGFloat(x + fw), midY: CGFloat(y) + CGFloat(h) / 2,
+                         scale: CGFloat(h), color: color)
+            }
         }
+    }
+
+    /// A filled slanted note head with a short stem, centred on the bar's end.
+    /// `noteMarker` is the public entry — callers that place their own progress
+    /// geometry (the agent plan bar) use it to mark a position.
+    static func noteMarker(_ ctx: CGContext, atX x: CGFloat, midY: CGFloat,
+                           scale: CGFloat, color: CGColor) {
+        noteHead(ctx, atX: x, midY: midY, scale: scale, color: color)
+    }
+
+    private static func noteHead(
+        _ ctx: CGContext, atX x: CGFloat, midY: CGFloat, scale: CGFloat, color: CGColor
+    ) {
+        let hw = scale * 0.62      // head width
+        let hh = scale * 0.46      // head height
+        ctx.saveGState()
+        // Stem rises from the head's right side.
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(max(1.4, scale * 0.13))
+        ctx.setLineCap(.round)
+        ctx.move(to: CGPoint(x: x + hw * 0.42, y: midY - hh * 0.2))
+        ctx.addLine(to: CGPoint(x: x + hw * 0.42, y: midY - scale * 1.15))
+        ctx.strokePath()
+        // Head, tilted like engraved notation.
+        ctx.translateBy(x: x, y: midY)
+        ctx.rotate(by: -0.35)
+        ctx.setFillColor(color)
+        ctx.fillEllipse(in: CGRect(x: -hw / 2, y: -hh / 2, width: hw, height: hh))
+        ctx.restoreGState()
     }
 
     // MARK: - Text
