@@ -61,7 +61,7 @@
 ## 安装
 
 从 [Releases](https://github.com/m1ng-li/mac-thermalright-ai-monitor/releases)
-下载 `.dmg`,打开后把 **MacTR AI** 拖进「应用程序」。
+下载 `.dmg`,打开后把 **FunTR** 拖进「应用程序」。
 
 > **首次打开会被 Gatekeeper 拦下。** 这个 App 没买 Apple 开发者证书(99 美元/年),
 > 只做了 ad-hoc 签名,所以 macOS 会说「无法验证开发者」。
@@ -70,7 +70,7 @@
 > 命令行等价写法:
 >
 > ```bash
-> xattr -dr com.apple.quarantine "/Applications/MacTR AI.app"
+> xattr -dr com.apple.quarantine "/Applications/FunTR.app"
 > ```
 
 装好后从菜单栏图标进入设置,可以打开「开机自启」。
@@ -95,8 +95,8 @@ swift build -c release
 ### 自己打包成 .app / .dmg
 
 ```bash
-./packaging/build-app.sh      # → dist/MacTR AI.app(自带 libusb,已 ad-hoc 签名)
-./packaging/make-dmg.sh       # → dist/MacTR-AI-<版本>-arm64.dmg
+./packaging/build-app.sh      # → dist/FunTR.app(自带 libusb,已 ad-hoc 签名)
+./packaging/make-dmg.sh       # → dist/FunTR-<版本>-arm64.dmg
 ```
 
 `build-app.sh` 会自动把二进制引用的所有非系统 dylib 复制进 `Contents/Frameworks`
@@ -112,8 +112,8 @@ swift build -c release
 如果你还想要「崩溃后自动拉起」,改用 LaunchAgent:
 
 ```bash
-cp packaging/com.m1ngli.MacTRAI.plist ~/Library/LaunchAgents/
-launchctl load -w ~/Library/LaunchAgents/com.m1ngli.MacTRAI.plist
+cp packaging/com.mikufanliu.FunTR.plist ~/Library/LaunchAgents/
+launchctl load -w ~/Library/LaunchAgents/com.mikufanliu.FunTR.plist
 ```
 
 两者只能选一个,同时开会启动两份实例互抢 USB 设备。
@@ -129,7 +129,7 @@ launchctl load -w ~/Library/LaunchAgents/com.m1ngli.MacTRAI.plist
 .build/release/MacTR --benchmark 120 # 测量 LCD 可达帧率
 ```
 
-装好的 App 里同样的入口是 `/Applications/MacTR AI.app/Contents/MacOS/MacTR`。
+装好的 App 里同样的入口是 `/Applications/FunTR.app/Contents/MacOS/MacTR`。
 
 同一时刻只能有一个进程占用 USB 设备 —— 用 `--demo` / `--benchmark` 前先停掉正在运行的实例。
 

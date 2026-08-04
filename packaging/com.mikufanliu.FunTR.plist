@@ -7,8 +7,8 @@
   Use this LaunchAgent instead when you want the one thing SMAppService does not
   do: KeepAlive, i.e. relaunch the app if it ever crashes.
 
-    cp packaging/com.m1ngli.MacTRAI.plist ~/Library/LaunchAgents/
-    launchctl load -w ~/Library/LaunchAgents/com.m1ngli.MacTRAI.plist
+    cp packaging/com.mikufanliu.FunTR.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.mikufanliu.FunTR.plist
 
   Turn the in-app "Launch at login" switch OFF if you use this, or the app gets
   started twice and the two copies fight over the USB device.
@@ -16,12 +16,12 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.m1ngli.MacTRAI</string>
+    <string>com.mikufanliu.FunTR</string>
 
     <!-- Assumes the app was installed from the .dmg into /Applications. -->
     <key>ProgramArguments</key>
     <array>
-        <string>/Applications/MacTR AI.app/Contents/MacOS/MacTR</string>
+        <string>/Applications/FunTR.app/Contents/MacOS/MacTR</string>
     </array>
 
     <!-- Start at login -->

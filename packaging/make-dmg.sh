@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# make-dmg.sh — wrap dist/MacTR AI.app into a drag-to-install disk image.
+# make-dmg.sh — wrap dist/FunTR.app into a drag-to-install disk image.
 #
 #   ./packaging/make-dmg.sh                     # version read from the bundle
 #   MACTR_VERSION=2.0.0 ./packaging/make-dmg.sh
 #
-# Output: dist/MacTR-AI-<version>-arm64.dmg
+# Output: dist/FunTR-<version>-arm64.dmg
 #
 # Run packaging/build-app.sh first.
 
@@ -13,7 +13,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-APP_NAME="MacTR AI"
+APP_NAME="FunTR"
 DIST="$REPO_ROOT/dist"
 APP="$DIST/$APP_NAME.app"
 
@@ -22,7 +22,7 @@ APP="$DIST/$APP_NAME.app"
 VERSION="${MACTR_VERSION:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
     "$APP/Contents/Info.plist")}"
 ARCH="$(lipo -archs "$APP/Contents/MacOS/MacTR" | tr ' ' '-')"
-DMG="$DIST/MacTR-AI-$VERSION-$ARCH.dmg"
+DMG="$DIST/FunTR-$VERSION-$ARCH.dmg"
 
 echo "==> staging"
 STAGE="$(mktemp -d)"

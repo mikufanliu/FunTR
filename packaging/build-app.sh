@@ -5,7 +5,7 @@
 #   MACTR_VERSION=2.0.0 ./packaging/build-app.sh    # override the bundle version
 #   SWIFT=/path/to/swift ./packaging/build-app.sh   # pin the toolchain
 #
-# Output: dist/MacTR AI.app
+# Output: dist/FunTR.app
 #
 # The bundle carries its own copy of libusb, so users do not need Homebrew. The
 # app is ad-hoc signed only (no Developer ID), which is enough for macOS to run
@@ -16,7 +16,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-APP_NAME="MacTR AI"
+APP_NAME="FunTR"
 DIST="$REPO_ROOT/dist"
 APP="$DIST/$APP_NAME.app"
 

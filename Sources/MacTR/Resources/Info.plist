@@ -3,15 +3,15 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>MacTR AI</string>
+	<string>FunTR</string>
 	<key>CFBundleExecutable</key>
 	<string>MacTR</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.m1ngli.MacTRAI</string>
+	<string>com.mikufanliu.FunTR</string>
 	<key>CFBundleName</key>
-	<string>MacTR AI</string>
+	<string>FunTR</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -25,6 +25,6 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>MIT License. Based on beret21/MacTR.</string>
+	<string>FunTR. Based on beret21/MacTR.</string>
 </dict>
 </plist>

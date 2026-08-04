@@ -9,7 +9,7 @@ import AppKit
 import os
 import SwiftUI
 
-private let mactrLogger = Logger(subsystem: "com.beret21.MacTR", category: "main")
+private let mactrLogger = Logger(subsystem: "com.mikufanliu.FunTR", category: "main")
 
 func log(_ message: String) {
     mactrLogger.info("\(message, privacy: .public)")
@@ -510,16 +510,18 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
 
         let alert = NSAlert()
-        alert.messageText = "MacTR"
+        alert.messageText = "FunTR"
         alert.informativeText = """
             Version \(version) (Build \(build))
 
-            Mac + Thermalright
-            Native macOS driver for Thermalright
-            Trofeo Vision 9.16 LCD display.
+            AI agent cockpit + system monitor
+            for the Thermalright Trofeo Vision
+            9.16 LCD display.
 
             Built with Swift + libusb
-            github.com/beret21/MacTR
+            github.com/mikufanliu/FunTR
+
+            Based on beret21/MacTR
             """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")

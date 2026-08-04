@@ -75,7 +75,7 @@ build from source.
 
 Grab the `.dmg` from
 [Releases](https://github.com/m1ng-li/mac-thermalright-ai-monitor/releases),
-open it and drag **MacTR AI** into Applications.
+open it and drag **FunTR** into Applications.
 
 > **Gatekeeper will block the first launch.** The app is ad-hoc signed only — there is
 > no $99/year Apple Developer certificate behind it — so macOS reports an unverified
@@ -85,7 +85,7 @@ open it and drag **MacTR AI** into Applications.
 > The command-line equivalent:
 >
 > ```bash
-> xattr -dr com.apple.quarantine "/Applications/MacTR AI.app"
+> xattr -dr com.apple.quarantine "/Applications/FunTR.app"
 > ```
 
 Once installed, open Settings from the menu bar icon to enable launch at login.
@@ -110,8 +110,8 @@ swift build -c release
 ### Packaging it yourself
 
 ```bash
-./packaging/build-app.sh      # → dist/MacTR AI.app (bundles libusb, ad-hoc signed)
-./packaging/make-dmg.sh       # → dist/MacTR-AI-<version>-arm64.dmg
+./packaging/build-app.sh      # → dist/FunTR.app (bundles libusb, ad-hoc signed)
+./packaging/make-dmg.sh       # → dist/FunTR-<version>-arm64.dmg
 ```
 
 `build-app.sh` copies every non-system dylib the binary references into
@@ -129,8 +129,8 @@ Use the toggle in the app's Settings (backed by `SMAppService`).
 If you also want the app relaunched after a crash, use the LaunchAgent instead:
 
 ```bash
-cp packaging/com.m1ngli.MacTRAI.plist ~/Library/LaunchAgents/
-launchctl load -w ~/Library/LaunchAgents/com.m1ngli.MacTRAI.plist
+cp packaging/com.mikufanliu.FunTR.plist ~/Library/LaunchAgents/
+launchctl load -w ~/Library/LaunchAgents/com.mikufanliu.FunTR.plist
 ```
 
 Pick one or the other — enabling both starts two instances that fight over the USB device.
@@ -147,7 +147,7 @@ Pick one or the other — enabling both starts two instances that fight over the
 ```
 
 For an installed copy the same entry point is
-`/Applications/MacTR AI.app/Contents/MacOS/MacTR`.
+`/Applications/FunTR.app/Contents/MacOS/MacTR`.
 
 Only one process can hold the USB device at a time — stop the running instance before
 using `--demo` / `--benchmark`.
