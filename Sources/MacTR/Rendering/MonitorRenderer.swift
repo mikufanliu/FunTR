@@ -815,8 +815,19 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let accent = Color.cyan
 
         Draw.panel(ctx, x: x, y: py, w: pw, h: ph, accent: accent)
-        panelTitle(ctx, "SKADI", x: x + 20, y: py + 14,
-                   font: Fonts.system(24, weight: .bold), color: accent)
+        let opFont = Fonts.system(24, weight: .bold)
+        panelTitle(ctx, "SKADI", x: x + 20, y: py + 14, font: opFont, color: accent)
+        // Unit number after the name — 01 is what Miku wears on her arm, so the theme
+        // spends it as an operator designation rather than as background texture.
+        if let badge = Theme.current.decor.unitBadge {
+            let nameW = ("SKADI" as NSString).size(withAttributes: [.font: opFont]).width
+            let glyphW = Theme.current.decor.headerGlyph == nil ? 0 : opFont.pointSize + 7
+            let bs: CGFloat = 15
+            Draw.glyph(ctx, badge,
+                       in: CGRect(x: CGFloat(x + 20) + glyphW + nameW + 9,
+                                  y: CGFloat(py + 14) + 8, width: bs, height: bs),
+                       color: accent.copy(alpha: 0.5) ?? accent)
+        }
         let status: String
         let statusColor: CGColor
         if busy { status = "作战中"; statusColor = Color.green }

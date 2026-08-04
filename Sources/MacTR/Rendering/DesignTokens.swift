@@ -157,17 +157,24 @@ struct Decor: Sendable {
     let segment: Segment
     let headerGlyph: MikuGlyph?   // small icon before a panel title
     let cornerGlyph: MikuGlyph?   // corner easter egg
+    let unitBadge: MikuGlyph?     // designation after the operator's name
 
     /// No ornament — the original drawing, unchanged.
     static let none = Decor(backdrop: .plain, binaryRain: false, divider: .straight,
                             gauge: .plain, segment: .plain,
-                            headerGlyph: nil, cornerGlyph: nil)
+                            headerGlyph: nil, cornerGlyph: nil, unitBadge: nil)
 
     /// Vocaloid kit: piano-roll backdrop, waveform rules, headphone gauges,
     /// note-head bars, a leek in the corner.
-    static let miku = Decor(backdrop: .pianoRoll, binaryRain: true, divider: .waveform,
+    ///
+    /// `binaryRain` is off. A full-bleed 01 texture was tried and read as garbled
+    /// noise rather than as texture — worst in the operator panel, which is mostly
+    /// empty, so there was nothing for it to sit behind. The 01 identity is carried by
+    /// the `badge01` glyph on the operator's name instead: one crisp mark beats a wall
+    /// of faint digits.
+    static let miku = Decor(backdrop: .pianoRoll, binaryRain: false, divider: .waveform,
                             gauge: .headphone, segment: .noteHead,
-                            headerGlyph: .note, cornerGlyph: .leek)
+                            headerGlyph: .note, cornerGlyph: .leek, unitBadge: .badge01)
 }
 
 /// A theme = a palette + style switches the drawing primitives read. Swapping
