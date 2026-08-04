@@ -164,11 +164,18 @@ enum Draw {
             if w / h > aspect { w = h * aspect } else { h = w / aspect }
             let fit = CGRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h)
             ctx.saveGState()
-            // Baked glyphs are drawn light-on-black and keyed to alpha, so tint by
-            // clipping to the art and filling — keeps them on-palette per theme.
-            ctx.clip(to: fit, mask: img)
+            // The context is flipped (Y=0 at top) and a clip mask is interpreted in the
+            // current space, so the mask arrives upside down — same reason
+            // `drawImageUpright` exists for the sprites. Undo the flip over `fit`
+            // before clipping, then fill in the mask's own space.
+            ctx.translateBy(x: fit.minX, y: fit.maxY)
+            ctx.scaleBy(x: 1, y: -1)
+            let local = CGRect(x: 0, y: 0, width: w, height: h)
+            // Baked glyphs are white-on-black keyed to alpha, so tint by clipping to
+            // the art and filling — keeps them on-palette per theme.
+            ctx.clip(to: local, mask: img)
             ctx.setFillColor(color)
-            ctx.fill(fit)
+            ctx.fill(local)
             ctx.restoreGState()
             return
         }
