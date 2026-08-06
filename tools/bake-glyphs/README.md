@@ -34,10 +34,13 @@ a clip mask, so every glyph follows the active palette instead of a hardcoded te
 ## Run
 
 ```bash
-# needs: image2 API key in env, python3 + Pillow, pngquant
-export IMAGE2_API_KEY=...            # or AZURE_OPENAI_API_KEY for that endpoint
+# needs: an OpenAI-compatible image endpoint, python3 + Pillow, pngquant
+# Defaults to ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN — the same gateway Claude
+# Code is pointed at, which proxies gpt-image-2. Override explicitly if yours differs:
+#   export IMAGE_API_BASE=https://…  IMAGE_API_KEY=…  IMAGE_MODEL=gpt-image-2
 ./tools/bake-glyphs/bake.sh          # all five
 ./tools/bake-glyphs/bake.sh leek     # just one, to iterate on a prompt
+SKIP_GENERATE=1 ./tools/bake-glyphs/bake.sh   # re-key + re-embed from $WORK, no API calls
 ```
 
 Then `swift build && ./.build/debug/FunTR --theme miku --snapshot /tmp/miku.png`.

@@ -1,10 +1,10 @@
-# MacTR — AI Agent & System Monitor for Thermalright LCD
+# FunTR — an AI agent cockpit on a Thermalright LCD
 
 [中文](README.md) · [English](README.en.md)
 
-Turn the 1920×480 LCD on your Thermalright CPU cooler into a live dashboard that shows
-your Mac's vitals **and what your AI coding agents are doing right now** — all native on
-macOS, no Windows required.
+Turns the 1920×480 LCD on a Thermalright CPU cooler into a live dashboard: your Mac's
+system state, and — the point of this fork — **what your AI coding assistants are doing
+right now**. Native macOS, no Windows required.
 
 ![On real hardware](img/photo.jpg)
 
@@ -12,54 +12,118 @@ macOS, no Windows required.
 
 ![Dashboard](img/dashboard.gif)
 
-<sub>Live demo (fake data). Both agents "working" → columns breathe, Bongo Cat types,
-Pikachu hops and crackles with CPU load, clock ticks.</sub>
+<sub>Live demo (fake data). **Note: both images predate the current build** — they show
+the old CPU｜AGENTS｜MEMORY layout with Bongo Cat and Pikachu, both since removed. See
+the layout below.</sub>
 
-> Fork of [beret21/MacTR](https://github.com/beret21/MacTR), reworked around a central
-> **AI Agents** panel that tracks [Claude Code](https://claude.com/claude-code) and
-> [Codex](https://openai.com/codex) sessions in real time.
+> A fork of [beret21/MacTR](https://github.com/beret21/MacTR). Upstream is a clean LCD
+> driver and system monitor; this fork moves the centre of gravity to a live cockpit for
+> [Claude Code](https://claude.com/claude-code) and [Codex](https://openai.com/codex)
+> sessions, and adds a theme system, an operator sprite and a lock-screen screensaver.
+
+## Layout
+
+Three panels across 1920×480:
+
+```
+┌──────────────┬──────────────────────────────────────┬──────────────┐
+│   OPERATOR   │            AI AGENTS                 │    STATUS    │
+│              │       (triple width, the point)      │              │
+│ Skadi chibi, │  left: session list                  │ clock / date │
+│ reacting to  │  right: focused session detail       │ lunar / net  │
+│ agent state  │  ────────────────────────────────    │ cpu/mem/temp │
+│              │  footer: today's tokens · quota       │              │
+└──────────────┴──────────────────────────────────────┴──────────────┘
+```
 
 ## Highlights
 
-### 🤖 AI Agents panel
-Reads your **local** Claude Code and Codex session logs (read-only, no network) and shows,
-for each agent, side by side:
+### 🤖 The agents cockpit
 
-- **Current project** and the **last thing it said** — Markdown tables in the message are
-  rendered as real aligned tables, not raw `| … |` text.
-- **Plan / step progress** — `步骤 4/6` badge + a segmented progress bar, parsed from
-  Codex `update_plan` and Claude `TodoWrite`. Stale plans from a finished turn disappear.
-- **Today's token usage** — total + In/Out, in a compact `万 / 亿` format.
-- **Codex remaining quota** — % left + reset countdown, tracked across all recent sessions.
-- **Live status** — the column **breathes** while an agent is working and **flashes** for
-  ~10 s when it finishes a turn or needs your input.
+Reads **local** Claude Code and Codex session records. Read-only, no network:
 
-### 🖥️ System panels
-- **CPU** — usage arc gauge, per-core P/E bars, temperature (via IOHIDEventSystemClient,
-  no sudo), load average.
-- **Memory** — pressure-colored usage gauge, Active/Wired/Compressed/Available breakdown,
-  a full-width clock, date, uptime and process count.
+- **Concurrent sessions side by side** — one card per recently-active session. Several
+  windows in the same repo each get their own card (`project #2`) instead of collapsing
+  into one.
+- **Auto-focused detail** — whichever session most needs you expands on the right with
+  its full last message. Markdown tables in that message are laid out as real tables,
+  not raw `| … |`.
+- **Which model is running** — shown next to the card title (`Opus 5`, `GPT-5.6`, …),
+  and it follows a mid-session `/model` switch.
+- **Plan progress** — a `4/6` badge and a segmented bar, from Codex's `update_plan` and
+  Claude's `TodoWrite`. A finished plan disappears rather than lingering. The active step
+  is marked with a note head.
+- **"Busy" vs "waiting on you"** — a permission prompt and a running tool look identical
+  in the transcript, so the session-state files Claude Code publishes are read as well.
+  That distinguishes **needs permission / needs input / dialog open**, and keeps flashing
+  until you deal with it. Records whose process is gone are skipped, so a crashed CLI
+  cannot pin a card forever.
+- **Cross-session activity feed** — state transitions scroll along the footer (started /
+  finished a turn / waiting on you).
+- **Today's tokens and Codex quota** — the quota is the newest reading across all recent
+  sessions.
 
-### 🐱⚡ Desk pets that react to activity
-- A **Bongo Cat** taps its keyboard while your agents work (and dozes when idle).
-- A **Pikachu** whose electricity crackles harder as CPU load rises, and who hops and
-  turns while an agent is running.
+### 🎨 Themes
+
+Three skins, switchable from the menu bar: **Classic**, **Hatsune Miku**, **Rhodes
+Island**.
+
+A theme is not just a palette — it also decides what gets **drawn**. The Miku kit leans
+on the one metaphor that is literally true, that Vocaloid is a DAW:
+
+| Element | Treatment |
+|---|---|
+| Backdrop | piano roll — bar lines accented every 4 beats, black-key lanes shaded |
+| Rules | dividers drawn as a tapered waveform instead of straight lines |
+| Arc gauges | headband and earcup arcs around the dial — her headset |
+| Progress | a note head marks the active plan step |
+| Glyphs | eighth note before each panel title, a leek in the corner, `01` after the name |
+
+Glyphs are generated offline and base64-embedded (see
+[`tools/bake-glyphs/`](tools/bake-glyphs/)). Any glyph without baked art falls back to a
+procedural CGPath drawing, so the theme is complete without running the generator.
+
+### 🐧 The operator
+
+The left panel is a Skadi action doll driven by real state: combat animations while an
+agent is working, a greeting when a session starts waiting on you, a flourish when one
+finishes, and idle pacing when everything is quiet. While the system is playing audio she
+moves to it, over a foot-level spectrum.
+
+Animations are baked offline from Spine skeletons into sprite strips (see
+[`tools/bake-operator/`](tools/bake-operator/)); swapping in a different character is a
+matter of replacing the asset.
+
+### 🌙 Lock-screen screensaver
+
+When the Mac locks, the LCD switches to an ambient scene (ultrawide wallpaper plus
+drifting stars) and returns on unlock. Settings can pin one wallpaper or auto-rotate.
+
+### 📌 Dynamic Island pushes
+
+Any script or agent can drop a transient message onto the LCD:
+
+```bash
+tools/mactr-pin '{"title":"Deploy done","body":"prod is live","icon":"✅","secs":12}'
+```
 
 ### ⚙️ Under the hood
-- **Adaptive frame rate** — the LCD runs at ~15 fps only while something is animating
-  (agent working, heavy CPU); otherwise it idles at 2 fps to save power.
-- **USB hotplug** — auto-reconnect on plug/unplug and sleep/wake.
-- **On-Mac preview** — when no LCD is connected it renders to a window instead, so you can
-  develop and see changes without the hardware.
-- **Menu bar app** — runs in the background, no dock icon.
+
+- **Adaptive frame rate** — ~15fps only while something actually animates (an agent
+  working, the screensaver, a push); 2fps otherwise to save power on an always-on app.
+- **USB hotplug** — reconnects after replug and after sleep/wake.
+- **On-Mac preview** — renders to a window when no LCD is attached, for development.
+- **Menu-bar app** — background, no Dock icon.
+- Brightness is gamma-based so bright wallpapers do not blow out to white; 180° rotation
+  is supported.
 
 ## Hardware
 
 | | |
 |---|---|
 | **Product** | [Thermalright Trofeo Vision 9.16 LCD](https://www.thermalright.com/product/trofeo-vision-9-16-lcd-black/) |
-| **Display** | 9.16" IPS, 1920 × 480 |
-| **Connection** | USB Type-C (USB 2.0) |
+| **Panel** | 9.16" IPS, 1920 × 480 |
+| **Interface** | USB Type-C (USB 2.0) |
 | **Device** | `0416:5408` (LY Bulk protocol) |
 
 ## Requirements
@@ -67,123 +131,137 @@ for each agent, side by side:
 - Apple Silicon Mac (M1–M5)
 - macOS 15 (Sequoia) or newer
 
-That's the whole list if you install the release build — libusb ships inside the app,
-so Homebrew is not needed. `libusb` and a Swift 6.1+ toolchain are only required to
-build from source.
+That is all you need for the packaged app — libusb is bundled, so no Homebrew. `libusb`
+and a Swift 6.1+ toolchain are only needed to build from source.
 
 ## Install
 
-Grab the `.dmg` from
-[Releases](https://github.com/m1ng-li/mac-thermalright-ai-monitor/releases),
-open it and drag **FunTR** into Applications.
+Grab the `.dmg` from [Releases](https://github.com/mikufanliu/FunTR/releases), open it and
+drag **FunTR** into Applications.
 
-> **Gatekeeper will block the first launch.** The app is ad-hoc signed only — there is
-> no $99/year Apple Developer certificate behind it — so macOS reports an unverified
-> developer. In Applications, **right-click the icon → Open**, then click Open again in
-> the dialog. Once is enough.
+> **Gatekeeper will block the first launch.** This app has no Apple Developer certificate
+> ($99/year), only an ad-hoc signature, so macOS reports an unverified developer.
+> **Right-click the icon → Open** in Applications, then click Open again in the dialog.
+> Once only.
 >
-> The command-line equivalent:
+> Command-line equivalent:
 >
 > ```bash
 > xattr -dr com.apple.quarantine "/Applications/FunTR.app"
 > ```
 
-Once installed, open Settings from the menu bar icon to enable launch at login.
+Launch at login is a switch in Settings, from the menu-bar icon.
 
 ## Build from source
 
 ```bash
 brew install libusb pkg-config
 
-git clone https://github.com/m1ng-li/mac-thermalright-ai-monitor.git
-cd mac-thermalright-ai-monitor
+git clone https://github.com/mikufanliu/FunTR.git
+cd FunTR
 swift build -c release
 
 .build/release/FunTR          # menu-bar app; drives the LCD, or previews in a window
 ```
 
-> If your Command Line Tools are broken and `swift build` fails on the package manifest,
-> install the Homebrew Swift toolchain (`brew install swift`) and use
+> If the system Command Line Tools are broken and `swift build` fails while parsing the
+> manifest, install the Homebrew toolchain (`brew install swift`) and use
 > `/opt/homebrew/opt/swift/bin/swift build -c release`, or pass
 > `SWIFT=/opt/homebrew/opt/swift/bin/swift` to the packaging scripts below.
 
-### Packaging it yourself
+### Package it yourself
 
 ```bash
 ./packaging/build-app.sh      # → dist/FunTR.app (bundles libusb, ad-hoc signed)
 ./packaging/make-dmg.sh       # → dist/FunTR-<version>-arm64.dmg
 ```
 
-`build-app.sh` copies every non-system dylib the binary references into
-`Contents/Frameworks`, rewrites the install names, and then asserts that no
-build-machine paths survived into the bundle.
+`build-app.sh` vendors every non-system dylib the binary references into
+`Contents/Frameworks`, rewrites the install names, and verifies no build-machine paths
+leaked into the result.
 
-The git tag is the source of truth for the version: pushing a `v*` tag triggers the
-[release workflow](.github/workflows/release.yml), which builds on CI and uploads the
-DMG to a GitHub Release.
+The version comes from the git tag: pushing a `v*` tag triggers the
+[release workflow](.github/workflows/release.yml), which builds and uploads the DMG.
 
-### Auto-start on login
+### Launch at login
 
-Use the toggle in the app's Settings (backed by `SMAppService`).
+The in-app switch (backed by `SMAppService`) is the simple path.
 
-If you also want the app relaunched after a crash, use the LaunchAgent instead:
+For relaunch-on-crash as well, use the LaunchAgent instead:
 
 ```bash
 cp packaging/com.mikufanliu.FunTR.plist ~/Library/LaunchAgents/
 launchctl load -w ~/Library/LaunchAgents/com.mikufanliu.FunTR.plist
 ```
 
-Pick one or the other — enabling both starts two instances that fight over the USB device.
+Pick one or the other — both at once starts two instances that fight over the USB device.
 
-## Modes
+## Run modes
 
 ```bash
-.build/release/FunTR                 # menu-bar app (LCD, or preview window if no LCD)
+.build/release/FunTR                 # menu-bar app (LCD, or preview window if none)
 .build/release/FunTR --preview       # force the on-Mac preview window
+.build/release/FunTR --theme miku    # start on a given theme (persists to settings)
 .build/release/FunTR --demo          # drive the LCD with polished fake data (for photos)
-.build/release/FunTR --snapshot x.png --cores 10   # render one demo frame to a PNG
+.build/release/FunTR --snapshot x.png            # render current real data to a PNG
+.build/release/FunTR --snapshot x.png --cores 10 # render one frame simulating N cores
 .build/release/FunTR --gif x.gif --frames 48 --fps 12 --scale 2   # animated demo GIF
 .build/release/FunTR --benchmark 120 # measure achievable LCD frame rate
+.build/release/FunTR --test-flash 30 # force every card into the alert state, to preview it
+.build/release/FunTR --rotate        # rotate the output 180°
+.build/release/FunTR --cli           # print metrics once to the terminal, no LCD
 ```
 
-For an installed copy the same entry point is
+In an installed app the same entry point is
 `/Applications/FunTR.app/Contents/MacOS/FunTR`.
 
-Only one process can hold the USB device at a time — stop the running instance before
-using `--demo` / `--benchmark`.
+Only one process can hold the USB device — stop a running instance before `--demo` or
+`--benchmark`.
+
+> After changing code, **restart the process**: a running instance holds the old
+> binary's inode, so `swift build` alone changes nothing on the LCD.
 
 ## How agent data is read
 
-MacTR never talks to any network or API. It only reads local session transcripts that the
-CLIs already write to disk:
+FunTR never touches a network or an API. It reads records these CLIs already write to
+local disk:
 
-| Agent | Source | What's parsed |
+| Agent | Source | Parsed |
 |---|---|---|
-| Claude Code | `~/.claude/projects/*/*.jsonl` | assistant messages, `usage` tokens, `TodoWrite` |
-| Codex | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` | agent messages, `token_count`, `rate_limits`, `update_plan` |
+| Claude Code | `~/.claude/projects/*/*.jsonl` | assistant messages, `usage` tokens, `TodoWrite`, `message.model` |
+| Claude Code | `~/.claude/sessions/*.json` | live session status (busy / waiting / idle) and the reason |
+| Codex | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` | agent messages, `token_count`, `rate_limits`, `update_plan`, `turn_context` |
 
-Token totals are scoped to the local day; the panel gracefully shows the last session's
-context when an agent hasn't run yet today.
+Token totals are scoped to the local calendar day. An agent that has not run today still
+shows the context of its last session. Transcripts are read from the tail on demand, never
+loaded whole.
 
 ## Privacy
 
-Everything is local and read-only. No telemetry, no network calls, nothing leaves your Mac.
+Everything is local and read-only. No telemetry, no network calls, nothing leaves your
+Mac.
+
+The one exception is `tools/bake-glyphs/bake.sh`, which **you** run deliberately and which
+calls an image-generation endpoint. It is an optional development tool; the app itself
+never does this.
 
 ## Credits
 
 - [beret21/MacTR](https://github.com/beret21/MacTR) — the original macOS driver this is built on
 - [thermalright-trcc-linux](https://github.com/Lexonight1/thermalright-trcc-linux) — LY Bulk protocol reverse engineering
-- [fermion-star/apple_sensors](https://github.com/fermion-star/apple_sensors) — IOHIDEventSystemClient temperature reading
-- [kuroni/bongocat-osu](https://github.com/kuroni/bongocat-osu) — Bongo Cat sprite
-- Pikachu artwork via [PokeAPI/sprites](https://github.com/PokeAPI/sprites) — Pokémon is © Nintendo / Creatures / GAME FREAK; included here as a cosmetic homage only
+- [fermion-star/apple_sensors](https://github.com/fermion-star/apple_sensors) — IOHIDEventSystemClient temperature reads
+- The operator sprite is from *Arknights*, © Hypergryph / Studio Montagne
+- Hatsune Miku and related marks are © Crypton Future Media
 
-> The Bongo Cat and Pikachu are purely decorative. If you redistribute builds, note that
-> their artwork belongs to the respective owners — swap or remove the embedded
-> `BongoCatAsset.swift` / `PikachuAsset.swift` if that matters for your use.
+> Embedded art is decorative and belongs to its respective owners. Check the relevant
+> terms before distributing a build, or replace the contents of
+> `Sources/MacTR/Rendering/*Asset.swift`.
 
-## License
+## Licence
 
-MIT (inherited from the upstream project). Third-party assets remain under their own terms.
+This repository does not currently carry a licence file. Upstream
+[beret21/MacTR](https://github.com/beret21/MacTR) has no LICENSE either, so no explicit
+redistribution grant exists — worth knowing before you fork or distribute.
 
 ---
 

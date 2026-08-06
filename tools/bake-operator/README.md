@@ -4,7 +4,7 @@ The left panel shows an Arknights operator chibi (Skadi) as a looping animation.
 Spine skeletal animation can't be drawn natively in the CoreGraphics frame loop,
 so animations are **pre-baked offline** into horizontal sprite-sheet strips and
 base64-embedded into `Sources/MacTR/Rendering/SkadiAsset.swift` — same convention
-as `BongoCatAsset` / `PikachuAsset`, keeping the bare binary self-contained.
+as `RoomAsset` / `MikuGlyphAsset`, keeping the bare binary self-contained.
 
 ## Pipeline
 
