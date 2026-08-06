@@ -40,7 +40,7 @@ export IMAGE2_API_KEY=...            # or AZURE_OPENAI_API_KEY for that endpoint
 ./tools/bake-glyphs/bake.sh leek     # just one, to iterate on a prompt
 ```
 
-Then `swift build && ./.build/debug/MacTR --theme miku --snapshot /tmp/miku.png`.
+Then `swift build && ./.build/debug/FunTR --theme miku --snapshot /tmp/miku.png`.
 
 Knobs: `SIZE` (default `1024x1024`), `FINAL_PX` (default `96`), `WORK` (default
 `/tmp/mactr-glyphs` — intermediates are kept there so you can inspect the raw

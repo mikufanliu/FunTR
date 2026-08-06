@@ -185,4 +185,4 @@ for g in sys.argv[1:]:
 open(out_swift, "w", encoding="utf-8").write(source)
 PY
 
-echo "==> done. Rebuild and check: swift build && ./.build/debug/MacTR --theme miku --snapshot /tmp/miku.png"
+echo "==> done. Rebuild and check: swift build && ./.build/debug/FunTR --theme miku --snapshot /tmp/miku.png"

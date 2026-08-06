@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-app.sh — build MacTR and assemble it into a self-contained .app bundle.
+# build-app.sh — build FunTR and assemble it into a self-contained .app bundle.
 #
 #   ./packaging/build-app.sh
 #   MACTR_VERSION=2.0.0 ./packaging/build-app.sh    # override the bundle version
@@ -42,7 +42,7 @@ echo "==> toolchain: $SWIFT_BIN"
 # ---------------------------------------------------------------- build
 echo "==> building release"
 "$SWIFT_BIN" build -c release
-BIN="$("$SWIFT_BIN" build -c release --show-bin-path)/MacTR"
+BIN="$("$SWIFT_BIN" build -c release --show-bin-path)/FunTR"
 [[ -x "$BIN" ]] || { echo "error: binary not found at $BIN" >&2; exit 1; }
 
 # ---------------------------------------------------------------- assemble
@@ -50,7 +50,7 @@ echo "==> assembling $APP_NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 
-cp "$BIN" "$APP/Contents/MacOS/MacTR"
+cp "$BIN" "$APP/Contents/MacOS/FunTR"
 cp packaging/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp Sources/MacTR/Resources/Info.plist "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
@@ -89,12 +89,12 @@ while IFS= read -r dep; do
     # The copy still advertises its Homebrew install name; rewrite it, then point
     # the executable at the bundled copy.
     install_name_tool -id "@rpath/$base" "$APP/Contents/Frameworks/$base"
-    install_name_tool -change "$dep" "@rpath/$base" "$APP/Contents/MacOS/MacTR"
-done < <(external_deps "$APP/Contents/MacOS/MacTR")
+    install_name_tool -change "$dep" "@rpath/$base" "$APP/Contents/MacOS/FunTR"
+done < <(external_deps "$APP/Contents/MacOS/FunTR")
 [[ $found -eq 1 ]] || echo "    (none)"
 
 install_name_tool -add_rpath "@executable_path/../Frameworks" \
-    "$APP/Contents/MacOS/MacTR" 2>/dev/null || true
+    "$APP/Contents/MacOS/FunTR" 2>/dev/null || true
 
 # Toolchains bake their own absolute path into an LC_RPATH (Homebrew's Swift adds
 # /opt/homebrew/Cellar/swift/...). Nothing resolves through it — the Swift runtime
@@ -105,10 +105,10 @@ while IFS= read -r rp; do
         /System/*|/usr/lib/*) ;;                      # system, legitimate
         @*) ;;                                        # bundle-relative, ours
         /*) echo "    dropping rpath $rp"
-            install_name_tool -delete_rpath "$rp" "$APP/Contents/MacOS/MacTR" \
+            install_name_tool -delete_rpath "$rp" "$APP/Contents/MacOS/FunTR" \
                 2>/dev/null || true ;;
     esac
-done < <(otool -l "$APP/Contents/MacOS/MacTR" | awk '/LC_RPATH/{f=1} f&&/ path /{print $2; f=0}')
+done < <(otool -l "$APP/Contents/MacOS/FunTR" | awk '/LC_RPATH/{f=1} f&&/ path /{print $2; f=0}')
 
 # ---------------------------------------------------------------- sign
 # Ad-hoc. Sign nested code before the outer bundle, otherwise the outer seal is
@@ -124,7 +124,7 @@ codesign --force --timestamp=none --sign - "$APP"
 echo "==> verifying"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
-leaked="$(external_deps "$APP/Contents/MacOS/MacTR")"
+leaked="$(external_deps "$APP/Contents/MacOS/FunTR")"
 if [[ -n "$leaked" ]]; then
     echo "error: bundle still references machine-local dylibs:" >&2
     echo "$leaked" >&2

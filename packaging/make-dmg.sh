@@ -21,7 +21,7 @@ APP="$DIST/$APP_NAME.app"
 
 VERSION="${MACTR_VERSION:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
     "$APP/Contents/Info.plist")}"
-ARCH="$(lipo -archs "$APP/Contents/MacOS/MacTR" | tr ' ' '-')"
+ARCH="$(lipo -archs "$APP/Contents/MacOS/FunTR" | tr ' ' '-')"
 DMG="$DIST/FunTR-$VERSION-$ARCH.dmg"
 
 echo "==> staging"

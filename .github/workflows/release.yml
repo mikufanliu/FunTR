@@ -37,7 +37,7 @@ jobs:
 
       - name: Assert no machine-local dylib references
         run: |
-          leaked=$(otool -L "dist/FunTR.app/Contents/MacOS/MacTR" \
+          leaked=$(otool -L "dist/FunTR.app/Contents/MacOS/FunTR" \
             | tail -n +2 | awk '{print $1}' \
             | grep -Ev '^(/System/|/usr/lib/|@rpath/|@executable_path/|@loader_path/)' || true)
           if [ -n "$leaked" ]; then
@@ -48,7 +48,7 @@ jobs:
 
       - name: Smoke test
         run: |
-          "dist/FunTR.app/Contents/MacOS/MacTR" --snapshot /tmp/frame.png --cores 10
+          "dist/FunTR.app/Contents/MacOS/FunTR" --snapshot /tmp/frame.png --cores 10
           test -s /tmp/frame.png
 
       - name: Compose release notes

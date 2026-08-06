@@ -99,7 +99,7 @@ git clone https://github.com/m1ng-li/mac-thermalright-ai-monitor.git
 cd mac-thermalright-ai-monitor
 swift build -c release
 
-.build/release/MacTR          # menu-bar app; drives the LCD, or previews in a window
+.build/release/FunTR          # menu-bar app; drives the LCD, or previews in a window
 ```
 
 > If your Command Line Tools are broken and `swift build` fails on the package manifest,
@@ -138,16 +138,16 @@ Pick one or the other — enabling both starts two instances that fight over the
 ## Modes
 
 ```bash
-.build/release/MacTR                 # menu-bar app (LCD, or preview window if no LCD)
-.build/release/MacTR --preview       # force the on-Mac preview window
-.build/release/MacTR --demo          # drive the LCD with polished fake data (for photos)
-.build/release/MacTR --snapshot x.png --cores 10   # render one demo frame to a PNG
-.build/release/MacTR --gif x.gif --frames 48 --fps 12 --scale 2   # animated demo GIF
-.build/release/MacTR --benchmark 120 # measure achievable LCD frame rate
+.build/release/FunTR                 # menu-bar app (LCD, or preview window if no LCD)
+.build/release/FunTR --preview       # force the on-Mac preview window
+.build/release/FunTR --demo          # drive the LCD with polished fake data (for photos)
+.build/release/FunTR --snapshot x.png --cores 10   # render one demo frame to a PNG
+.build/release/FunTR --gif x.gif --frames 48 --fps 12 --scale 2   # animated demo GIF
+.build/release/FunTR --benchmark 120 # measure achievable LCD frame rate
 ```
 
 For an installed copy the same entry point is
-`/Applications/FunTR.app/Contents/MacOS/MacTR`.
+`/Applications/FunTR.app/Contents/MacOS/FunTR`.
 
 Only one process can hold the USB device at a time — stop the running instance before
 using `--demo` / `--benchmark`.

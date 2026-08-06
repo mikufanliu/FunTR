@@ -19,7 +19,38 @@ func log(_ message: String) {
 
 @main
 struct MacTREntry {
+    /// Settings keys that predate the FunTR rename.
+    private static let persistedKeys = ["themeName", "screensaverEnabled", "screensaverRoomMode"]
+
+    /// Carry settings across the MacTR → FunTR rename, once.
+    ///
+    /// UserDefaults keys live under the bundle identifier, or — for a bare binary with
+    /// no bundle, which is how this is usually launched — under the process name. Both
+    /// changed in the rebrand, so without this a rename silently resets the user's
+    /// theme, screensaver and wallpaper choice. Legacy domains in preference order:
+    /// the old bare-binary name first, then the old .app's identifier.
+    private static func migrateLegacyDefaults() {
+        let defaults = UserDefaults.standard
+        let flag = "migratedFromMacTRDomains"
+        guard !defaults.bool(forKey: flag) else { return }
+        defer { defaults.set(true, forKey: flag) }
+
+        // Already has its own settings → nothing to carry, don't clobber them.
+        guard !persistedKeys.contains(where: { defaults.object(forKey: $0) != nil }) else { return }
+
+        for domain in ["MacTR", "com.m1ngli.MacTRAI"] {
+            guard let old = defaults.persistentDomain(forName: domain) else { continue }
+            let found = persistedKeys.filter { old[$0] != nil }
+            guard !found.isEmpty else { continue }
+            for key in found { defaults.set(old[key], forKey: key) }
+            log("[Defaults] Migrated \(found.count) setting(s) from \(domain)")
+            return
+        }
+    }
+
     static func main() {
+        migrateLegacyDefaults()
+
         // Optional theme override for headless modes (--theme miku|rhodes|classic).
         if let ti = CommandLine.arguments.firstIndex(of: "--theme"), ti + 1 < CommandLine.arguments.count {
             let arg = CommandLine.arguments[ti + 1]

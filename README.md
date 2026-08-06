@@ -84,7 +84,7 @@ git clone https://github.com/m1ng-li/mac-thermalright-ai-monitor.git
 cd mac-thermalright-ai-monitor
 swift build -c release
 
-.build/release/MacTR          # 菜单栏应用;驱动 LCD,或没接 LCD 时弹预览窗口
+.build/release/FunTR          # 菜单栏应用;驱动 LCD,或没接 LCD 时弹预览窗口
 ```
 
 > 如果系统的 Command Line Tools 损坏、`swift build` 在解析包清单时报错,
@@ -121,15 +121,15 @@ launchctl load -w ~/Library/LaunchAgents/com.mikufanliu.FunTR.plist
 ## 运行模式
 
 ```bash
-.build/release/MacTR                 # 菜单栏应用(有 LCD 走 LCD,没有则预览窗口)
-.build/release/MacTR --preview       # 强制打开本机预览窗口
-.build/release/MacTR --demo          # 用精美假数据驱动 LCD(方便拍照 / 展示)
-.build/release/MacTR --snapshot x.png --cores 10        # 渲染一帧假数据到 PNG
-.build/release/MacTR --gif x.gif --frames 48 --fps 12 --scale 2   # 生成演示 GIF
-.build/release/MacTR --benchmark 120 # 测量 LCD 可达帧率
+.build/release/FunTR                 # 菜单栏应用(有 LCD 走 LCD,没有则预览窗口)
+.build/release/FunTR --preview       # 强制打开本机预览窗口
+.build/release/FunTR --demo          # 用精美假数据驱动 LCD(方便拍照 / 展示)
+.build/release/FunTR --snapshot x.png --cores 10        # 渲染一帧假数据到 PNG
+.build/release/FunTR --gif x.gif --frames 48 --fps 12 --scale 2   # 生成演示 GIF
+.build/release/FunTR --benchmark 120 # 测量 LCD 可达帧率
 ```
 
-装好的 App 里同样的入口是 `/Applications/FunTR.app/Contents/MacOS/MacTR`。
+装好的 App 里同样的入口是 `/Applications/FunTR.app/Contents/MacOS/FunTR`。
 
 同一时刻只能有一个进程占用 USB 设备 —— 用 `--demo` / `--benchmark` 前先停掉正在运行的实例。
 

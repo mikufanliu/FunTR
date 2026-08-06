@@ -21,7 +21,7 @@
     <!-- Assumes the app was installed from the .dmg into /Applications. -->
     <key>ProgramArguments</key>
     <array>
-        <string>/Applications/FunTR.app/Contents/MacOS/MacTR</string>
+        <string>/Applications/FunTR.app/Contents/MacOS/FunTR</string>
     </array>
 
     <!-- Start at login -->

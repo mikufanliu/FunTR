@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "MacTR",
+    name: "FunTR",
     platforms: [
         .macOS("15.0")
     ],
@@ -24,11 +24,13 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "MacTR",
+            name: "FunTR",
             dependencies: [
                 "CLibUSB",
                 "CThermalSensor",
             ],
+            // The sources keep their original directory name; only the product is
+            // renamed, so the rebrand costs no file moves.
             path: "Sources/MacTR",
             swiftSettings: [
                 .unsafeFlags(["-I/opt/homebrew/include/libusb-1.0"]),
