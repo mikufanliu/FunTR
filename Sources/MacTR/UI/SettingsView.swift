@@ -1,6 +1,6 @@
 // SettingsView.swift — Settings window (SwiftUI)
 //
-// Tabs: General | Display | Layout | Device | About
+// Tabs: General | Display | Device | About
 
 import AppKit
 import ServiceManagement
@@ -10,13 +10,10 @@ struct SettingsView: View {
     @Bindable var state: AppState
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
-    // Settings talks to the layout and wallpaper files directly rather than reaching
-    // into the renderer: both are file-backed, and the render loop notices a change on
-    // its next tick (mtime), so writing the file IS the hand-off.
-    @State private var layoutService = LayoutService()
+    // The wallpaper list is read straight off disk rather than from the renderer: it is
+    // file-backed, and the render loop rescans on its own tick. Layout arrangement lives
+    // in its own drag-and-drop window (LayoutEditorView), not here.
     @State private var wallpapers = WallpaperSource()
-    @State private var draft = LayoutConfig.default
-    @State private var layoutError: String?
     @State private var wallpaperNames: [String] = []
 
     var body: some View {
@@ -29,10 +26,6 @@ struct SettingsView: View {
                 displaySettings
             }
 
-            Tab("Layout", systemImage: "square.grid.2x2") {
-                layoutSettings
-            }
-
             Tab("Device", systemImage: "cable.connector") {
                 deviceSettings
             }
@@ -42,105 +35,12 @@ struct SettingsView: View {
             }
         }
         .frame(width: 520, height: 400)
-        .onAppear {
-            layoutService.refresh()
-            draft = layoutService.current()
-            reloadWallpapers()
-        }
+        .onAppear { reloadWallpapers() }
     }
 
     private func reloadWallpapers() {
         wallpapers.refresh()
         wallpaperNames = (0..<wallpapers.count).map { wallpapers.name(at: $0) }
-    }
-
-    // MARK: - Layout Tab
-
-    private var layoutSettings: some View {
-        Form {
-            Section("网格") {
-                Stepper("列 \(draft.cols)", value: $draft.cols, in: 1...12)
-                Stepper("行 \(draft.rows)", value: $draft.rows, in: 1...6)
-                Text("组件按格子占位,像手机桌面的 1×1 / 2×2。改动保存后即时生效。")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("组件") {
-                ForEach(WidgetKind.allCases, id: \.rawValue) { kind in
-                    widgetRow(kind)
-                }
-            }
-
-            Section {
-                if let layoutError {
-                    Label(layoutError, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange).font(.caption)
-                }
-                HStack {
-                    Button("保存并应用") { saveLayout() }
-                        .buttonStyle(.borderedProminent)
-                    Button("恢复默认") {
-                        draft = .default
-                        saveLayout()
-                    }
-                    Spacer()
-                    Button("打开配置文件") {
-                        NSWorkspace.shared.selectFile(
-                            LayoutService.configPath,
-                            inFileViewerRootedAtPath: (LayoutService.configPath as NSString)
-                                .deletingLastPathComponent)
-                    }
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-    }
-
-    /// One widget's row: a toggle for whether it is placed at all, then its footprint.
-    @ViewBuilder
-    private func widgetRow(_ kind: WidgetKind) -> some View {
-        let idx = draft.placements.firstIndex { $0.kind == kind }
-        VStack(alignment: .leading, spacing: 4) {
-            Toggle(kind.title, isOn: Binding(
-                get: { idx != nil },
-                set: { on in
-                    if on {
-                        guard !draft.placements.contains(where: { $0.kind == kind }) else { return }
-                        let need = kind.minSpan
-                        draft.placements.append(Placement(kind: kind, col: 0, row: 0,
-                                                          colSpan: need.cols, rowSpan: need.rows))
-                    } else {
-                        draft.placements.removeAll { $0.kind == kind }
-                    }
-                }))
-            if let i = idx {
-                HStack(spacing: 12) {
-                    Stepper("列 \(draft.placements[i].col)",
-                            value: $draft.placements[i].col, in: 0...(draft.cols - 1))
-                    Stepper("行 \(draft.placements[i].row)",
-                            value: $draft.placements[i].row, in: 0...(draft.rows - 1))
-                }
-                .font(.caption)
-                HStack(spacing: 12) {
-                    Stepper("宽 \(draft.placements[i].colSpan)",
-                            value: $draft.placements[i].colSpan, in: 1...draft.cols)
-                    Stepper("高 \(draft.placements[i].rowSpan)",
-                            value: $draft.placements[i].rowSpan, in: 1...draft.rows)
-                }
-                .font(.caption)
-            }
-        }
-    }
-
-    /// Validate before writing — an invalid arrangement is reported here rather than
-    /// silently falling back at render time.
-    private func saveLayout() {
-        if let problem = layoutService.save(draft) {
-            layoutError = "\(problem)"
-        } else {
-            layoutError = nil
-        }
     }
 
     // MARK: - General Tab

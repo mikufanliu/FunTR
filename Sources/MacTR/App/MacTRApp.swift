@@ -176,7 +176,7 @@ final class PreviewController: NSObject, NSApplicationDelegate, NSWindowDelegate
             contentRect: NSRect(origin: .zero, size: contentSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
-        window.title = "MacTR Preview — \(Layout.width)x\(Layout.height)"
+        window.title = "FunTR Preview — \(Layout.width)x\(Layout.height)"
         window.contentAspectRatio = NSSize(width: Layout.width, height: Layout.height)
         window.delegate = self
 
@@ -394,7 +394,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
 
         // App title + version
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.0"
-        versionMenuItem = NSMenuItem(title: "MacTR v\(version)", action: nil, keyEquivalent: "")
+        versionMenuItem = NSMenuItem(title: "FunTR v\(version)", action: nil, keyEquivalent: "")
         versionMenuItem.isEnabled = false
         menu.addItem(versionMenuItem)
 
@@ -415,6 +415,13 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
         settingsItem.target = self
         menu.addItem(settingsItem)
 
+        // Visual layout editor — arranging a screen is a spatial job, so it gets its
+        // own window with a preview of the real canvas rather than a form of steppers.
+        let layoutItem = NSMenuItem(title: "布局编辑器...", action: #selector(openLayoutEditor),
+                                    keyEquivalent: "l")
+        layoutItem.target = self
+        menu.addItem(layoutItem)
+
         // Preview window (manual reopen after closing it)
         let previewItem = NSMenuItem(title: "Preview Window", action: #selector(showPreviewManually), keyEquivalent: "p")
         previewItem.target = self
@@ -428,14 +435,14 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
         menu.addItem(.separator())
 
         // About
-        let aboutItem = NSMenuItem(title: "About MacTR", action: #selector(showAbout), keyEquivalent: "")
+        let aboutItem = NSMenuItem(title: "About FunTR", action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
         menu.addItem(aboutItem)
 
         menu.addItem(.separator())
 
         // Quit
-        let quitItem = NSMenuItem(title: "Quit MacTR", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit FunTR", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -535,11 +542,31 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
         let settingsView = SettingsView(state: appState)
         let hostingController = NSHostingController(rootView: settingsView)
         let window = NSWindow(contentViewController: hostingController)
-        window.title = "MacTR Settings"
+        window.title = "FunTR Settings"
         window.styleMask = [.titled, .closable]
         window.setContentSize(NSSize(width: 450, height: 350))
         window.center()
         window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Held so the window is not deallocated the moment this method returns.
+    private var layoutEditorWindow: NSWindow?
+
+    @objc private func openLayoutEditor() {
+        if let existing = layoutEditorWindow {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let controller = NSHostingController(rootView: LayoutEditorView())
+        let window = NSWindow(contentViewController: controller)
+        window.title = "FunTR 布局"
+        window.styleMask = [.titled, .closable]
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        layoutEditorWindow = window
         NSApp.activate(ignoringOtherApps: true)
     }
 
