@@ -16,6 +16,10 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     private let agentCollector = AgentUsageCollector()
     // "Dynamic Island" push channel — agents/scripts drop a message onto the LCD.
     private let pinService = PinService()
+    // Widget arrangement from ~/.mactr/layout.json (falls back to the built-in default).
+    private let layoutService = LayoutService()
+    // Screensaver backdrops: built-in plus anything in ~/.mactr/wallpapers.
+    let wallpapers = WallpaperSource()
 
     // Background metrics collection — decoupled from frame loop for consistent refresh
     private let metricsQueue = DispatchQueue(label: "com.thermalvision.metrics")
@@ -103,6 +107,11 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         metricsRunning = true
         lock.unlock()
         log("[Metrics] Starting collection...")
+        // Load the arrangement before the first frame. The metrics loop refreshes it
+        // afterwards, but its first tick is ~0.3s in — long enough that a short-lived
+        // run (--snapshot) could finish having only ever drawn the default layout.
+        layoutService.refresh()
+        wallpapers.refresh()
         // First pass: prime CPU ticks (deltas will be zero)
         let cpu0 = collector.collectCPU()
         let mem = collector.collectMemory()
@@ -160,6 +169,8 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
                 let net = collector.collectNetwork()
                 let audio = AudioService.isPlaying()
                 pinService.refresh()
+                layoutService.refresh()
+                wallpapers.refresh()
                 lock.lock()
                 _cpu = cpu; _mem = mem; _net = net; _audioPlaying = audio
                 lock.unlock()
@@ -266,11 +277,38 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             renderScreensaver(ctx)
             return ctx.makeImage()
         }
-        renderOperator(ctx, agents: agents, audioPlaying: true)
-        renderAgents(ctx, agents: agents)
-        renderInfoPanel(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys,
-                        net: NetworkSnapshot(rxBytesPerSec: 1_450_000, txBytesPerSec: 240_000))
+        renderWidgets(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys,
+                      net: NetworkSnapshot(rxBytesPerSec: 1_450_000, txBytesPerSec: 240_000),
+                      agents: agents, audioPlaying: true)
         return ctx.makeImage()
+    }
+
+    /// Lay the configured widgets onto the canvas. Both the live frame loop and the
+    /// simulated/demo path go through here, so an arrangement is honoured everywhere.
+    private func renderWidgets(_ ctx: CGContext, cpu: CPUSnapshot, mem: MemorySnapshot,
+                               temp: TemperatureSnapshot, sys: SystemSnapshot?,
+                               net: NetworkSnapshot?, agents: AgentsSnapshot,
+                               audioPlaying: Bool) {
+        let config = layoutService.current()
+        let grid = config.grid
+        for p in config.placements {
+            let frame = grid.rect(col: p.col, row: p.row, colSpan: p.colSpan, rowSpan: p.rowSpan)
+            switch p.kind {
+            case .operatorPanel:
+                renderOperator(ctx, agents: agents, audioPlaying: audioPlaying, in: frame)
+            case .agents:
+                renderAgents(ctx, agents: agents, in: frame)
+            case .status:
+                renderInfoPanel(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys,
+                                net: net, in: frame)
+            case .clock:
+                renderClockWidget(ctx, in: frame)
+            case .network:
+                renderNetworkWidget(ctx, net: net, in: frame)
+            case .gauges:
+                renderGaugesWidget(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys, in: frame)
+            }
+        }
     }
 
     // Serializes render() callers — the USB frame loop and the on-Mac preview
@@ -331,9 +369,8 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         if saver {
             renderScreensaver(ctx)
         } else {
-            renderOperator(ctx, agents: agents, audioPlaying: audioPlaying)
-            renderAgents(ctx, agents: agents)
-            renderInfoPanel(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys, net: net)
+            renderWidgets(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys, net: net,
+                          agents: agents, audioPlaying: audioPlaying)
         }
 
         // Dynamic-Island push overlay — drawn last so it floats over anything.
@@ -353,18 +390,90 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     /// CPU/temp metrics displaced when Skadi took the CPU slot.
     private func renderInfoPanel(_ ctx: CGContext, cpu: CPUSnapshot, mem: MemorySnapshot,
                                  temp: TemperatureSnapshot, sys: SystemSnapshot?,
-                                 net: NetworkSnapshot?) {
-        let x = Layout.panelX(4)
-        let pw = Layout.panelWidth
-        let py = Layout.panelY
-        let ph = Layout.panelHeight
+                                 net: NetworkSnapshot?, in frame: CGRect) {
+        let x = Int(frame.minX)
+        let pw = Int(frame.width)
+        let py = Int(frame.minY)
+        let ph = Int(frame.height)
         let accent = Color.cyan
         let cx = x + pw / 2
         Draw.panel(ctx, x: x, y: py, w: pw, h: ph, accent: accent)
         panelTitle(ctx, "STATUS", x: x + 20, y: py + 14,
                    font: Fonts.system(20, weight: .bold), color: accent)
 
-        // ── Zone 1: time hero — HH:MM heavy, :SS smaller & accented ──
+        // The three zones are also placeable on their own (WidgetKind.clock / .network
+        // / .gauges), so their drawing lives in content functions that lay out from the
+        // top of whatever rect they are handed. The offsets below are the ones this
+        // panel has always used, so the composite is pixel-identical to before.
+        let inner = CGFloat(x), innerW = CGFloat(pw)
+        drawClockContent(ctx, in: CGRect(x: inner, y: CGFloat(py + 38),
+                                         width: innerW, height: 160), accent: accent)
+        drawNetworkContent(ctx, net: net,
+                           in: CGRect(x: inner, y: CGFloat(py + 206),
+                                      width: innerW, height: 86))
+        drawGaugesContent(ctx, cpu: cpu, mem: mem, temp: temp,
+                          in: CGRect(x: inner, y: CGFloat(py + 328),
+                                     width: innerW, height: 70))
+
+        if let sys {
+            let h = sys.uptimeSeconds / 3600
+            let up = h >= 24 ? "开机 \(h / 24)d \(h % 24)h" : "开机 \(h)h \((sys.uptimeSeconds % 3600) / 60)m"
+            Draw.centeredText(ctx, up, cx: cx, y: py + ph - 22, font: Fonts.system(14), color: Color.textD)
+        }
+    }
+
+    // MARK: - Status zones as standalone widgets
+    //
+    // Each zone can be placed on its own cell. The wrapper draws the panel frame and
+    // title, then centres the zone's natural height in what is left — so a zone in a
+    // roomy cell sits in the middle rather than clinging to the top.
+
+    /// Panel + title, returning the content rect for a zone of `naturalHeight`.
+    private func widgetChrome(_ ctx: CGContext, _ title: String, in frame: CGRect,
+                              naturalHeight: CGFloat, accent: CGColor) -> CGRect {
+        Draw.panel(ctx, x: Int(frame.minX), y: Int(frame.minY),
+                   w: Int(frame.width), h: Int(frame.height), accent: accent)
+        panelTitle(ctx, title, x: Int(frame.minX) + 20, y: Int(frame.minY) + 14,
+                   font: Fonts.system(20, weight: .bold), color: accent)
+        let top = frame.minY + 38
+        let avail = max(0, frame.maxY - 8 - top)
+        let y = top + max(0, (avail - naturalHeight) / 2)
+        return CGRect(x: frame.minX, y: y, width: frame.width,
+                      height: min(naturalHeight, avail))
+    }
+
+    private func renderClockWidget(_ ctx: CGContext, in frame: CGRect) {
+        let accent = Color.cyan
+        let r = widgetChrome(ctx, "时钟", in: frame, naturalHeight: 160, accent: accent)
+        drawClockContent(ctx, in: r, accent: accent)
+    }
+
+    private func renderNetworkWidget(_ ctx: CGContext, net: NetworkSnapshot?, in frame: CGRect) {
+        let accent = Color.green
+        let r = widgetChrome(ctx, "网络", in: frame, naturalHeight: 86, accent: accent)
+        drawNetworkContent(ctx, net: net, in: r)
+    }
+
+    private func renderGaugesWidget(_ ctx: CGContext, cpu: CPUSnapshot, mem: MemorySnapshot,
+                                    temp: TemperatureSnapshot, sys: SystemSnapshot?,
+                                    in frame: CGRect) {
+        let accent = Color.cyan
+        let r = widgetChrome(ctx, "系统", in: frame, naturalHeight: 70, accent: accent)
+        drawGaugesContent(ctx, cpu: cpu, mem: mem, temp: temp, in: r)
+        if let sys {
+            let h = sys.uptimeSeconds / 3600
+            let up = h >= 24 ? "开机 \(h / 24)d \(h % 24)h" : "开机 \(h)h \((sys.uptimeSeconds % 3600) / 60)m"
+            Draw.centeredText(ctx, up, cx: Int(frame.midX), y: Int(frame.maxY) - 22,
+                              font: Fonts.system(14), color: Color.textD)
+        }
+    }
+
+    // MARK: - Status zone contents (no panel frame; positioned from the rect's top)
+
+    /// Time hero — HH:MM heavy, :SS smaller and accented, then date and lunar date.
+    private func drawClockContent(_ ctx: CGContext, in r: CGRect, accent: CGColor) {
+        let cx = Int(r.midX)
+        let top = Int(r.minY)
         let df = DateFormatter()
         df.dateFormat = "HH:mm"; let hhmm = df.string(from: Date())
         df.dateFormat = "ss";    let ss = df.string(from: Date())
@@ -373,48 +482,54 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let hhmmW = (hhmm as NSString).size(withAttributes: [.font: hhmmF]).width
         let ssW = (ss as NSString).size(withAttributes: [.font: ssF]).width
         let gap: CGFloat = 10
-        let startX = CGFloat(cx) - (hhmmW + gap + ssW) / 2
-        let clockTop = py + 38
-        Draw.text(ctx, hhmm, x: Int(startX), y: clockTop, font: hhmmF, color: Color.textW)
-        Draw.text(ctx, ss, x: Int(startX + hhmmW + gap), y: clockTop + 36, font: ssF, color: accent)
+        let startX = r.midX - (hhmmW + gap + ssW) / 2
+        Draw.text(ctx, hhmm, x: Int(startX), y: top, font: hhmmF, color: Color.textW)
+        Draw.text(ctx, ss, x: Int(startX + hhmmW + gap), y: top + 36, font: ssF, color: accent)
 
         let zh = DateFormatter(); zh.locale = Locale(identifier: "zh_CN")
         zh.dateFormat = "EEEE  M月d日"
-        Draw.centeredText(ctx, zh.string(from: Date()), cx: cx, y: py + 132,
+        Draw.centeredText(ctx, zh.string(from: Date()), cx: cx, y: top + 94,
                           font: Fonts.system(18, weight: .medium), color: Color.textS)
-        Draw.centeredText(ctx, lunarString(Date()), cx: cx, y: py + 158,
+        Draw.centeredText(ctx, lunarString(Date()), cx: cx, y: top + 120,
                           font: Fonts.system(18), color: Color.orange)
 
         // centered accent hairline as a section motif
         ctx.setStrokeColor(accent.copy(alpha: 0.5) ?? accent)
         ctx.setLineWidth(2); ctx.setLineCap(.round)
-        ctx.move(to: CGPoint(x: CGFloat(cx) - 26, y: CGFloat(py + 190)))
-        ctx.addLine(to: CGPoint(x: CGFloat(cx) + 26, y: CGFloat(py + 190)))
+        ctx.move(to: CGPoint(x: r.midX - 26, y: CGFloat(top + 152)))
+        ctx.addLine(to: CGPoint(x: r.midX + 26, y: CGFloat(top + 152)))
         ctx.strokePath()
+    }
 
-        // ── Zone 2: network sparkline ──
+    /// Up/down rates plus a mirrored sparkline of recent throughput.
+    private func drawNetworkContent(_ ctx: CGContext, net: NetworkSnapshot?, in r: CGRect) {
         netHistory.append((net?.rxBytesPerSec ?? 0, net?.txBytesPerSec ?? 0))
         if netHistory.count > 80 { netHistory.removeFirst(netHistory.count - 80) }
-        let plotX = x + 20, plotW = pw - 40
-        Draw.text(ctx, "网络", x: plotX, y: py + 206, font: Fonts.system(16), color: Color.textL)
+        let top = Int(r.minY)
+        let plotX = Int(r.minX) + 20, plotW = Int(r.width) - 40
+        Draw.text(ctx, "网络", x: plotX, y: top, font: Fonts.system(16), color: Color.textL)
         let dStr = "↓ " + Draw.formatBytesPerSec(net?.rxBytesPerSec ?? 0)
         let uStr = "↑ " + Draw.formatBytesPerSec(net?.txBytesPerSec ?? 0)
         let vF = Fonts.system(16, weight: .semibold)
         let uW = (uStr as NSString).size(withAttributes: [.font: vF]).width
         let dW = (dStr as NSString).size(withAttributes: [.font: vF]).width
-        Draw.text(ctx, uStr, x: Int(CGFloat(plotX + plotW) - uW), y: py + 206, font: vF, color: Color.cyan)
-        Draw.text(ctx, dStr, x: Int(CGFloat(plotX + plotW) - uW - dW - 14), y: py + 206, font: vF, color: Color.green)
+        Draw.text(ctx, uStr, x: Int(CGFloat(plotX + plotW) - uW), y: top, font: vF, color: Color.cyan)
+        Draw.text(ctx, dStr, x: Int(CGFloat(plotX + plotW) - uW - dW - 14), y: top, font: vF, color: Color.green)
         let maxV = max(1024.0, netHistory.flatMap { [$0.rx, $0.tx] }.max() ?? 1)
-        drawSparkline(ctx, values: netHistory.map { $0.rx }, x: plotX, y: py + 232, w: plotW, h: 60,
+        let plotH = max(20, Int(r.height) - 26)
+        drawSparkline(ctx, values: netHistory.map { $0.rx }, x: plotX, y: top + 26, w: plotW, h: plotH,
                       maxV: maxV, color: Color.green, fill: true)
-        drawSparkline(ctx, values: netHistory.map { $0.tx }, x: plotX, y: py + 232, w: plotW, h: 60,
+        drawSparkline(ctx, values: netHistory.map { $0.tx }, x: plotX, y: top + 26, w: plotW, h: plotH,
                       maxV: maxV, color: Color.cyan, fill: false)
+    }
 
-        // ── Zone 3: system mini rings — CPU / mem / temp ──
-        let ringY = py + 358
+    /// CPU / memory / temperature mini rings, spread across the rect.
+    private func drawGaugesContent(_ ctx: CGContext, cpu: CPUSnapshot, mem: MemorySnapshot,
+                                   temp: TemperatureSnapshot, in r: CGRect) {
         let rr = 30
+        let ringY = Int(r.minY) + rr
         func ring(_ i: Int, _ label: String, _ pct: Double, _ valStr: String, _ c: CGColor) {
-            let rcx = x + pw * (2 * i + 1) / 6
+            let rcx = Int(r.minX) + Int(r.width) * (2 * i + 1) / 6
             Draw.arcGauge(ctx, cx: rcx, cy: ringY, radius: rr, percent: pct,
                           color: c, colorDark: Color.border, thickness: 7)
             Draw.centeredText(ctx, valStr, cx: rcx, y: ringY - 13,
@@ -428,12 +543,6 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
             ring(2, "温度", min(100, t / 90 * 100), String(format: "%.0f°", t), level(t, 65, 82))
         } else {
             ring(2, "温度", 0, "—", Color.textL)
-        }
-
-        if let sys {
-            let h = sys.uptimeSeconds / 3600
-            let up = h >= 24 ? "开机 \(h / 24)d \(h % 24)h" : "开机 \(h)h \((sys.uptimeSeconds % 3600) / 60)m"
-            Draw.centeredText(ctx, up, cx: cx, y: py + ph - 22, font: Fonts.system(14), color: Color.textD)
         }
     }
 
@@ -503,11 +612,12 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
 
     /// Animated Skadi chibi in the left panel. She walks (Move) while any agent is
     /// working, and idles (Relax) otherwise.
-    private func renderOperator(_ ctx: CGContext, agents: AgentsSnapshot, audioPlaying: Bool) {
-        let x = Layout.panelX(0)
-        let pw = Layout.panelWidth
-        let py = Layout.panelY
-        let ph = Layout.panelHeight
+    private func renderOperator(_ ctx: CGContext, agents: AgentsSnapshot,
+                                audioPlaying: Bool, in frame: CGRect) {
+        let x = Int(frame.minX)
+        let pw = Int(frame.width)
+        let py = Int(frame.minY)
+        let ph = Int(frame.height)
         let busy = agents.anyLive
         let accent = Color.cyan
 
@@ -622,17 +732,21 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         let now = Date().timeIntervalSince1970
 
         lock.lock(); let mode = _saverRoomMode; lock.unlock()
-        let count = RoomAsset.count
+        let count = wallpapers.count
         var idx = 0
         if count > 0 {
             idx = mode > 0 ? min(mode - 1, count - 1) : Int(now / 45) % count
-            let wp = RoomAsset.images[idx]
-            // Aspect-fill the whole canvas (wallpapers are pre-cropped to 1920x480).
-            ctx.interpolationQuality = .high
-            let scale = max(fw / CGFloat(wp.width), fh / CGFloat(wp.height))
-            let sw = CGFloat(wp.width) * scale, sh = CGFloat(wp.height) * scale
-            drawImageUpright(ctx, wp, in: CGRect(x: (fw - sw) / 2, y: (fh - sh) / 2,
-                                                 width: sw, height: sh))
+            if let wp = wallpapers.image(at: idx) {
+                // Aspect-fill the whole canvas. Built-ins are pre-cropped to 1920x480;
+                // a user image of any aspect is filled and centre-cropped.
+                ctx.interpolationQuality = .high
+                let scale = max(fw / CGFloat(wp.width), fh / CGFloat(wp.height))
+                let sw = CGFloat(wp.width) * scale, sh = CGFloat(wp.height) * scale
+                drawImageUpright(ctx, wp, in: CGRect(x: (fw - sw) / 2, y: (fh - sh) / 2,
+                                                     width: sw, height: sh))
+            } else {
+                drawStars(ctx, now)
+            }
         } else {
             drawStars(ctx, now)
         }
@@ -794,11 +908,11 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
 
     // MARK: - AI Agents Panel (triple width)
 
-    private func renderAgents(_ ctx: CGContext, agents: AgentsSnapshot) {
-        let x = Layout.panelX(1)
-        let pw = Layout.panelWidth * 3 + Layout.gap * 2
-        let py = Layout.panelY
-        let ph = Layout.panelHeight
+    private func renderAgents(_ ctx: CGContext, agents: AgentsSnapshot, in frame: CGRect) {
+        let x = Int(frame.minX)
+        let pw = Int(frame.width)
+        let py = Int(frame.minY)
+        let ph = Int(frame.height)
 
         // Whole-panel accent turns red only while an agent RECENTLY finished and
         // wants you now — not for every long-idle session sitting in a waiting state.

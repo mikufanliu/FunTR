@@ -15,6 +15,13 @@ func log(_ message: String) {
     mactrLogger.info("\(message, privacy: .public)")
 }
 
+/// For things the user needs to be able to find after the fact — a rejected config,
+/// a failed device open. `.info` is memory-only and gets evicted from the buffer, so
+/// `log show` can miss it minutes later; `.error` is persisted to disk.
+func logProblem(_ message: String) {
+    mactrLogger.error("\(message, privacy: .public)")
+}
+
 // MARK: - App Entry Point
 
 @main
