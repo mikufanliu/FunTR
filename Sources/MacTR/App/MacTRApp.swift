@@ -237,7 +237,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuDelegate
     private var updateTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        log("[*] MacTR starting...")
+        log("[*] FunTR starting...")
 
         // Create status bar item — this NEVER gets removed
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)

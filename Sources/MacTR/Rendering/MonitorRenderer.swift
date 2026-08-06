@@ -237,7 +237,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
                            message: "已完成回流检测埋点，改动集中在 ReflowService 与登录处理。",
                            secondsSinceActive: 3, waiting: false, flash: false, isWorking: true,
                            stepCurrent: 3, stepTotal: 4, stepText: "渲染 Claude 消息表格"),
-                AgentEntry(kind: .claude, id: "claude:MacTR", project: "MacTR",
+                AgentEntry(kind: .claude, id: "claude:FunTR", project: "FunTR",
                            message: "正在把 AI Agents 面板重构成控制塔布局。",
                            secondsSinceActive: 11, waiting: false, flash: false, isWorking: true,
                            stepCurrent: 2, stepTotal: 2, stepText: "列表 + 自动聚焦详情"),
