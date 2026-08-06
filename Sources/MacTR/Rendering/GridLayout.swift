@@ -88,6 +88,20 @@ enum WidgetKind: String, CaseIterable, Codable, Sendable {
         case .gauges:        return "仪表环"
         }
     }
+
+    /// The footprints this widget is offered in, phone-widget style: a handful of
+    /// presets rather than free resizing, so every option is one someone has looked at.
+    /// Ordered small to large; the first is the default when dropped.
+    var sizePresets: [(cols: Int, rows: Int)] {
+        switch self {
+        case .operatorPanel: return [(1, 2), (1, 1), (2, 2)]
+        case .agents:        return [(3, 2), (3, 1), (4, 2), (5, 2)]
+        case .status:        return [(1, 2)]
+        case .clock:         return [(1, 1), (2, 1), (1, 2)]
+        case .network:       return [(1, 1), (2, 1)]
+        case .gauges:        return [(1, 1), (2, 1)]
+        }
+    }
 }
 
 /// One widget's cell footprint.

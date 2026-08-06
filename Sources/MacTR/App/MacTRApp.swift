@@ -107,6 +107,12 @@ struct MacTREntry {
             return
         }
 
+        // Dump the layout editor's previews as PNGs (headless check of widget imagery).
+        if CommandLine.arguments.contains("--dump-previews") {
+            runDumpPreviews()
+            return
+        }
+
         // Snapshot mode: render one frame and save as PNG
         // Usage: --snapshot path.png [--cores N]
         if CommandLine.arguments.contains("--snapshot") {

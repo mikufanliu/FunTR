@@ -279,35 +279,92 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         }
         renderWidgets(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys,
                       net: NetworkSnapshot(rxBytesPerSec: 1_450_000, txBytesPerSec: 240_000),
-                      agents: agents, audioPlaying: true)
+                      agents: agents, audioPlaying: true, config: nil)
+        return ctx.makeImage()
+    }
+
+    // MARK: - Editor previews
+    //
+    // The layout editor shows the real thing rather than coloured placeholders: these
+    // draw with the showcase data, so no metrics collection or USB is involved and the
+    // result is deterministic and instant.
+
+    /// The whole canvas as it would look under `config`.
+    func renderPreview(config: LayoutConfig) -> CGImage? {
+        let (cpu, mem, temp, sys, agents) = demoData()
+        let w = Layout.width, h = Layout.height
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.translateBy(x: 0, y: CGFloat(h)); ctx.scaleBy(x: 1, y: -1)
+        Draw.gradientBackground(ctx)
+        renderWidgets(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys,
+                      net: NetworkSnapshot(rxBytesPerSec: 1_450_000, txBytesPerSec: 240_000),
+                      agents: agents, audioPlaying: true, config: config)
+        return ctx.makeImage()
+    }
+
+    /// A single widget at a given cell footprint, for the gallery. Rendered on the
+    /// theme's own backdrop at exactly the size it would occupy, so the thumbnail is a
+    /// truthful sample rather than an icon.
+    func renderWidgetPreview(_ kind: WidgetKind, colSpan: Int, rowSpan: Int,
+                             cols: Int, rows: Int) -> CGImage? {
+        let (cpu, mem, temp, sys, agents) = demoData()
+        let grid = GridLayout(cols: cols, rows: rows)
+        let frame = grid.rect(col: 0, row: 0, colSpan: colSpan, rowSpan: rowSpan)
+        let w = Int(frame.width) + 2 * Layout.margin
+        let h = Int(frame.height) + 2 * Layout.margin
+        guard w > 0, h > 0,
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.translateBy(x: 0, y: CGFloat(h)); ctx.scaleBy(x: 1, y: -1)
+        // Backdrop, then the widget inset by the margin so its frame is fully visible.
+        Draw.gradientBackground(ctx)
+        let placed = CGRect(x: CGFloat(Layout.margin), y: CGFloat(Layout.margin),
+                            width: frame.width, height: frame.height)
+        drawWidget(ctx, kind: kind, frame: placed, cpu: cpu, mem: mem, temp: temp, sys: sys,
+                   net: NetworkSnapshot(rxBytesPerSec: 1_450_000, txBytesPerSec: 240_000),
+                   agents: agents, audioPlaying: false)
         return ctx.makeImage()
     }
 
     /// Lay the configured widgets onto the canvas. Both the live frame loop and the
     /// simulated/demo path go through here, so an arrangement is honoured everywhere.
+    /// `config` overrides the saved arrangement — used by the editor preview.
     private func renderWidgets(_ ctx: CGContext, cpu: CPUSnapshot, mem: MemorySnapshot,
                                temp: TemperatureSnapshot, sys: SystemSnapshot?,
                                net: NetworkSnapshot?, agents: AgentsSnapshot,
-                               audioPlaying: Bool) {
-        let config = layoutService.current()
+                               audioPlaying: Bool, config override: LayoutConfig? = nil) {
+        let config = override ?? layoutService.current()
         let grid = config.grid
         for p in config.placements {
             let frame = grid.rect(col: p.col, row: p.row, colSpan: p.colSpan, rowSpan: p.rowSpan)
-            switch p.kind {
-            case .operatorPanel:
-                renderOperator(ctx, agents: agents, audioPlaying: audioPlaying, in: frame)
-            case .agents:
-                renderAgents(ctx, agents: agents, in: frame)
-            case .status:
-                renderInfoPanel(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys,
-                                net: net, in: frame)
-            case .clock:
-                renderClockWidget(ctx, in: frame)
-            case .network:
-                renderNetworkWidget(ctx, net: net, in: frame)
-            case .gauges:
-                renderGaugesWidget(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys, in: frame)
-            }
+            drawWidget(ctx, kind: p.kind, frame: frame, cpu: cpu, mem: mem, temp: temp,
+                       sys: sys, net: net, agents: agents, audioPlaying: audioPlaying)
+        }
+    }
+
+    /// One widget into one rect — the single place that maps a kind to its renderer.
+    private func drawWidget(_ ctx: CGContext, kind: WidgetKind, frame: CGRect,
+                            cpu: CPUSnapshot, mem: MemorySnapshot, temp: TemperatureSnapshot,
+                            sys: SystemSnapshot?, net: NetworkSnapshot?,
+                            agents: AgentsSnapshot, audioPlaying: Bool) {
+        switch kind {
+        case .operatorPanel:
+            renderOperator(ctx, agents: agents, audioPlaying: audioPlaying, in: frame)
+        case .agents:
+            renderAgents(ctx, agents: agents, in: frame)
+        case .status:
+            renderInfoPanel(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys, net: net, in: frame)
+        case .clock:
+            renderClockWidget(ctx, in: frame)
+        case .network:
+            renderNetworkWidget(ctx, net: net, in: frame)
+        case .gauges:
+            renderGaugesWidget(ctx, cpu: cpu, mem: mem, temp: temp, sys: sys, in: frame)
         }
     }
 
