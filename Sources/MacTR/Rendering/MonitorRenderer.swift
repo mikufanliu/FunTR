@@ -1,8 +1,10 @@
-// MonitorRenderer.swift — System Monitor 3-panel dashboard
+// MonitorRenderer.swift — the 1920x480 dashboard
 //
-// Set 1: CPU | AI AGENTS (triple width) | MEMORY
-// The AGENTS panel shows each agent's current activity (top) and today's
-// token usage + quota (bottom), sourced from local session transcripts.
+// Layout: OPERATOR | AI AGENTS (triple width) | STATUS
+// The AGENTS panel is the centre of the thing: one card per live Claude/Codex
+// session, with the focused one expanded on the right. OPERATOR is the Skadi
+// chibi reacting to that state; STATUS carries the clock, network and the
+// CPU/memory/temp dials.
 
 import AppKit
 import CoreGraphics
@@ -136,8 +138,6 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         // A pin is sliding in/out or counting down → animate smoothly.
         if pinService.current() != nil { return true }
-        // Heavy CPU → Pikachu crackles with electricity, worth animating smoothly
-        if let c = _cpu, c.total > 55 { return true }
         guard let a = _agents else { return false }
         return a.anyLive
     }
@@ -346,259 +346,11 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         return image
     }
 
-    // MARK: - CPU Panel
-
-    private func renderCPU(_ ctx: CGContext, cpu: CPUSnapshot, temp: TemperatureSnapshot,
-                           agentsBusy: Bool) {
-        let x = Layout.panelX(0)
-        let pw = Layout.panelWidth
-        let py = Layout.panelY
-        let ph = Layout.panelHeight
-
-        Draw.panel(ctx, x: x, y: py, w: pw, h: ph, accent: Color.blue)
-        Draw.text(ctx, "CPU", x: x + 20, y: py + 14, font: Fonts.system(24, weight: .bold), color: Color.blue)
-        // Arc gauge
-        let gcx = x + 100, gcy = py + 138
-        Draw.arcGauge(ctx, cx: gcx, cy: gcy, radius: 70,
-                      percent: cpu.total,
-                      color: Color.forPercent(cpu.total),
-                      colorDark: Color.forPercentDark(cpu.total), thickness: 13)
-        Draw.centeredText(ctx, String(format: "%.0f", cpu.total),
-                          cx: gcx, y: gcy - 28,
-                          font: Fonts.system(50, weight: .bold), color: Color.textW)
-        Draw.centeredText(ctx, "%", cx: gcx, y: gcy + 24,
-                          font: Fonts.system(20), color: Color.textS)
-
-        // Per-core bars — E-cores first, then P-cores, shifted down half a row
-        let barX = x + 194
-        let barW = pw - 218
-        let coreCount = cpu.perCore.count
-        let bottomLimit = py + ph - 96
-        let fontSize: CGFloat = coreCount > 16 ? 12 : (coreCount > 10 ? 14 : 16)
-        let barH = coreCount > 16 ? 8 : (coreCount > 10 ? 10 : 10)
-        let spacing = min(36, (bottomLimit - py - 18) / max(coreCount, 1))
-        let startY = py + 18 + spacing / 2  // shifted down half a row
-
-        let pCoreCount = cpu.pCoreCount
-        let eCoreCount = coreCount - pCoreCount
-
-        // Reorder: E-cores first, then P-cores
-        for row in 0..<coreCount {
-            let by = startY + row * spacing
-            if by + Int(fontSize) > bottomLimit { break }
-
-            let coreIndex: Int
-            let isECore: Bool
-            let label: String
-            if row < eCoreCount {
-                // E-core rows first
-                coreIndex = pCoreCount + row
-                isECore = true
-                label = "E\(row + 1)"
-            } else {
-                // P-core rows after
-                coreIndex = row - eCoreCount
-                isECore = false
-                label = "P\(row - eCoreCount + 1)"
-            }
-
-            let pct = coreIndex < cpu.perCore.count ? cpu.perCore[coreIndex] : 0
-            let barColor = isECore ? Color.cyan : Color.forPercent(pct)
-
-            Draw.text(ctx, label, x: barX, y: by,
-                      font: Fonts.system(fontSize), color: isECore ? Color.cyan : Color.textD)
-            Draw.bar(ctx, x: barX + 28, y: by + 4, w: barW - 78, h: barH,
-                     percent: pct, color: barColor)
-            Draw.text(ctx, String(format: "%.0f%%", pct),
-                      x: barX + barW - 46, y: by,
-                      font: Fonts.system(fontSize), color: Color.textS)
-        }
-
-        // Pikachu in the left space below the gauge — its electricity scales with
-        // CPU load (the machine's "power draw"). While an AI agent is working it
-        // hops and turns to face left/right, like it's cheering the machine on.
-        if let pika = PikachuAsset.image {
-            let t = Date().timeIntervalSince1970
-            let size: CGFloat = 132
-            var rect = CGRect(x: CGFloat(x + 100) - size / 2, y: CGFloat(py + 210),
-                              width: size, height: size)
-            var flip = false
-            if agentsBusy {
-                let hop = CGFloat(abs(sin(t * .pi * 2)) * 9)   // ~2 hops/sec
-                rect.origin.y -= hop                            // up (flipped coords)
-                flip = Int(t * 2) % 4 >= 2                       // turn every ~1s
-            }
-            drawElectricity(ctx, around: rect, intensity: cpu.total, t: t)
-            drawImageUpright(ctx, pika, in: rect, flipX: flip)
-        }
-
-        // Temp + Load — large, spanning the full panel width at the bottom.
-        // Label on the left, value right-aligned to the panel edge.
-        let rightEdge = CGFloat(x + pw - 18)
-        let tempY = py + ph - 78
-        if let cpuTemp = temp.cpuTemp {
-            let tempColor = cpuTemp > 65 ? Color.red : (cpuTemp > 50 ? Color.orange : Color.green)
-            Draw.text(ctx, "Temp", x: x + 18, y: tempY + 8,
-                      font: Fonts.system(26, weight: .medium), color: Color.textL)
-            let vStr = String(format: "%.0f°C", cpuTemp)
-            let vFont = Fonts.system(42, weight: .bold)
-            let vW = (vStr as NSString).size(withAttributes: [.font: vFont]).width
-            Draw.text(ctx, vStr, x: Int(rightEdge - vW), y: tempY,
-                      font: vFont, color: tempColor)
-        }
-        let loadY = py + ph - 34
-        let (l1, l5, l15) = cpu.loadAvg
-        Draw.text(ctx, "Load", x: x + 18, y: loadY,
-                  font: Fonts.system(22, weight: .medium), color: Color.textL)
-        let lStr = String(format: "%.1f / %.1f / %.1f", l1, l5, l15)
-        let lFont = Fonts.system(26, weight: .medium)
-        let lW = (lStr as NSString).size(withAttributes: [.font: lFont]).width
-        Draw.text(ctx, lStr, x: Int(rightEdge - lW), y: loadY,
-                  font: lFont, color: Color.textS)
-    }
-
-    /// Yellow lightning crackling around Pikachu — more/brighter bolts as `intensity`
-    /// (CPU %) rises. Flickers with `t` so it animates while the frame rate is high.
-    private func drawElectricity(_ ctx: CGContext, around rect: CGRect,
-                                 intensity: Double, t: Double) {
-        let level = min(max(intensity / 100, 0), 1)
-        let yellow = CGColor(red: 1.0, green: 0.9, blue: 0.15, alpha: 1)
-        let bolts = 2 + Int(level * 6)             // 2…8 bolts
-        ctx.setStrokeColor(yellow); ctx.setLineCap(.round); ctx.setLineJoin(.round)
-        for i in 0..<bolts {
-            // Twinkle: each bolt blinks on/off on its own phase
-            if (Int(t * 14) + i * 5) % 3 == 0 { continue }
-            let ang = Double(i) / Double(bolts) * 2 * .pi + t * 0.7
-            let ax = rect.midX + CGFloat(cos(ang)) * rect.width * 0.44
-            let ay = rect.midY + CGFloat(sin(ang)) * rect.height * 0.42
-            // Jagged 3-segment bolt pointing outward from the anchor
-            let len = CGFloat(9 + level * 15)
-            let dx = CGFloat(cos(ang)), dy = CGFloat(sin(ang))
-            let nx = -dy, ny = dx                  // perpendicular for the zigzag
-            ctx.setLineWidth(1.6 + CGFloat(level) * 1.2)
-            let jag = 4 + level * 3
-            ctx.move(to: CGPoint(x: ax, y: ay))
-            ctx.addLine(to: CGPoint(x: ax + dx * len * 0.4 + nx * CGFloat(jag),
-                                    y: ay + dy * len * 0.4 + ny * CGFloat(jag)))
-            ctx.addLine(to: CGPoint(x: ax + dx * len * 0.7 - nx * CGFloat(jag),
-                                    y: ay + dy * len * 0.7 - ny * CGFloat(jag)))
-            ctx.addLine(to: CGPoint(x: ax + dx * len, y: ay + dy * len))
-            ctx.strokePath()
-        }
-    }
-
-    // MARK: - Memory Panel
-
-    private func renderMemory(_ ctx: CGContext, mem: MemorySnapshot, sys: SystemSnapshot?,
-                              agentsBusy: Bool) {
-        let x = Layout.panelX(4)
-        let pw = Layout.panelWidth
-        let py = Layout.panelY
-        let totalGB = Double(mem.total) / (1024 * 1024 * 1024)
-        let pct = mem.percent
-
-        Draw.panel(ctx, x: x, y: py, w: pw, h: Layout.panelHeight, accent: Color.green)
-        Draw.text(ctx, "MEMORY", x: x + 20, y: py + 14,
-                  font: Fonts.system(24, weight: .bold), color: Color.green)
-        Draw.text(ctx, String(format: "%.0f GB", totalGB), x: x + pw - 75, y: py + 16,
-                  font: Fonts.system(18), color: Color.textD)
-
-        // Arc gauge — length = used% (utilization gauge), COLOR = macOS memory pressure.
-        // A Mac using RAM as cache (high used%, low pressure) is healthy → stays green.
-        let gcx = x + 100, gcy = py + 138
-        Draw.arcGauge(ctx, cx: gcx, cy: gcy, radius: 70,
-                      percent: pct,
-                      color: Color.forPressure(mem.pressure),
-                      colorDark: Color.forPressureDark(mem.pressure), thickness: 13)
-        Draw.centeredText(ctx, String(format: "%.0f", pct), cx: gcx, y: gcy - 28,
-                          font: Fonts.system(50, weight: .bold), color: Color.textW)
-        Draw.centeredText(ctx, "%", cx: gcx, y: gcy + 24,
-                          font: Fonts.system(20), color: Color.textS)
-
-        // Breakdown
-        let rx = x + 194
-        let rw = pw - 218
-        var ry = py + 48
-
-        Draw.text(ctx, "Breakdown", x: rx, y: ry,
-                  font: Fonts.system(18), color: Color.textL)
-        ry += 28
-
-        let activeGB = Double(mem.active) / (1024 * 1024 * 1024)
-        let wiredGB = Double(mem.wired) / (1024 * 1024 * 1024)
-        let compressedGB = Double(mem.compressed) / (1024 * 1024 * 1024)
-        let availGB = Double(mem.available) / (1024 * 1024 * 1024)
-
-        let items: [(String, Double, CGColor)] = [
-            ("Active", activeGB, Color.green),
-            ("Wired", wiredGB, Color.orange),
-            ("Compressed", compressedGB, Color.purple),
-            ("Available", availGB, Color.cyan),
-        ]
-        for (label, val, color) in items {
-            Draw.text(ctx, label, x: rx, y: ry,
-                      font: Fonts.system(17), color: Color.textL)
-            let valStr = String(format: "%.1fG", val)
-            let valFont = Fonts.system(17)
-            let valW = (valStr as NSString).size(withAttributes: [.font: valFont]).width
-            Draw.text(ctx, valStr, x: Int(CGFloat(rx + rw) - valW), y: ry,
-                      font: valFont, color: Color.textS)
-            Draw.bar(ctx, x: rx, y: ry + 24, w: rw, h: 10,
-                     percent: val / totalGB * 100, color: color)
-            ry += 48
-        }
-
-        // Bottom: a Bongo Cat tapping the divider "table", then the clock below it.
-        // (Swap monitoring removed — this space now shows the date/time.)
-        let ph = Layout.panelHeight
-        let dividerY = py + ph - 116
-        let cx0 = x + 16
-        let cw = pw - 32
-        Draw.rule(ctx, from: CGPoint(x: cx0, y: dividerY),
-                  to: CGPoint(x: cx0 + cw, y: dividerY), color: Color.border)
-
-        // Bongo cat sits on the left, tapping the divider when an agent is busy
-        let t = Date().timeIntervalSince1970
-        let tapPhase = Int(t * 5) % 2 == 0
-        drawBongoCat(ctx, cx: x + 96, baseY: dividerY, tapping: agentsBusy, phase: tapPhase)
-
-        // Right of the cat: date, weekday, uptime, processes
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US")
-        let ix = x + 190
-        formatter.dateFormat = "yyyy-MM-dd"
-        Draw.text(ctx, formatter.string(from: Date()), x: ix, y: py + ph - 196,
-                  font: Fonts.system(22, weight: .semibold), color: Color.textW)
-        formatter.dateFormat = "EEEE"
-        Draw.text(ctx, formatter.string(from: Date()), x: ix, y: py + ph - 170,
-                  font: Fonts.system(16), color: Color.textS)
-
-        let iw = pw - (ix - x) - 16
-        func stat(_ label: String, _ value: String, _ sy: Int) {
-            Draw.text(ctx, label, x: ix, y: sy, font: Fonts.system(15), color: Color.textL)
-            let vf = Fonts.system(15, weight: .medium)
-            let vw = (value as NSString).size(withAttributes: [.font: vf]).width
-            Draw.text(ctx, value, x: Int(CGFloat(ix + iw) - vw), y: sy, font: vf, color: Color.textS)
-        }
-        if let sys {
-            let h = sys.uptimeSeconds / 3600, m = (sys.uptimeSeconds % 3600) / 60
-            let up = h >= 24 ? "\(h / 24)d \(h % 24)h" : "\(h)h \(m)m"
-            stat("Uptime", up, py + ph - 142)
-            stat("Procs", "\(sys.processCount)", py + ph - 120)
-        }
-
-        // Clock — big, centered across the full panel width, below the divider
-        formatter.dateFormat = "HH:mm:ss"
-        Draw.centeredText(ctx, formatter.string(from: Date()),
-                          cx: x + pw / 2, y: dividerY + 30,
-                          font: Fonts.system(66, weight: .medium), color: Color.textW)
-    }
-
-    // MARK: - Info Panel (replaces Memory in the current layout; renderMemory kept as a component)
+    // MARK: - Info Panel (right slot)
 
     /// Right-panel replacement: big clock + Gregorian date/weekday + lunar date (all
     /// local), live network up/down, and a compact system readout that re-homes the
-    /// CPU/temp metrics displaced when Skadi took the CPU slot. No Bongo Cat.
+    /// CPU/temp metrics displaced when Skadi took the CPU slot.
     private func renderInfoPanel(_ ctx: CGContext, cpu: CPUSnapshot, mem: MemorySnapshot,
                                  temp: TemperatureSnapshot, sys: SystemSnapshot?,
                                  net: NetworkSnapshot?) {
@@ -731,60 +483,6 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
         return "\(gz)\(zod)年 \(mon)\(day)"
     }
 
-    // MARK: - Bongo Cat (real line-art sprite, kuroni/bongocat-osu)
-
-    /// Draw the classic Bongo Cat: the real line-art head sprite peeking over a desk,
-    /// with a keyboard and two pink paws that slap it (`baseY` is the desk line). When
-    /// `tapping`, the paws alternate; otherwise they rest and a "z" floats up.
-    private func drawBongoCat(_ ctx: CGContext, cx: Int, baseY: Int, tapping: Bool, phase: Bool) {
-        let dark = CGColor(red: 30/255, green: 34/255, blue: 48/255, alpha: 1)
-        let pink = CGColor(red: 244/255, green: 150/255, blue: 174/255, alpha: 1)
-        let kbTop = CGColor(red: 210/255, green: 216/255, blue: 230/255, alpha: 1)
-        let cxD = CGFloat(cx), b = CGFloat(baseY)
-
-        // --- Keyboard on the desk ---
-        let kbW: CGFloat = 152, kbH: CGFloat = 15
-        let kbX = cxD - kbW / 2, kbY = b - kbH
-        let kbPath = CGPath(roundedRect: CGRect(x: kbX, y: kbY, width: kbW, height: kbH),
-                            cornerWidth: 4, cornerHeight: 4, transform: nil)
-        ctx.setFillColor(kbTop); ctx.addPath(kbPath); ctx.fillPath()
-        ctx.setStrokeColor(dark); ctx.setLineWidth(1.5); ctx.addPath(kbPath); ctx.strokePath()
-        ctx.setLineWidth(1)
-        var kx = kbX + 13
-        while kx < kbX + kbW - 6 {
-            ctx.move(to: CGPoint(x: kx, y: kbY + 2)); ctx.addLine(to: CGPoint(x: kx, y: kbY + kbH - 2))
-            kx += 13
-        }
-        ctx.strokePath()
-
-        // --- Cat head sprite, chin just above the keyboard ---
-        if let cat = BongoCatAsset.image {
-            let cw: CGFloat = 148
-            let ch = cw * CGFloat(cat.height) / CGFloat(cat.width)
-            let rect = CGRect(x: cxD - cw / 2, y: kbY - 4 - ch, width: cw, height: ch)
-            drawImageUpright(ctx, cat, in: rect)
-        }
-
-        // --- Pink paws resting on / slapping the keyboard, outlined to match line art ---
-        let pawRX: CGFloat = 13, pawRY: CGFloat = 10
-        let downY = kbY + 2, upY = kbY - 14         // down = on keys, up = lifted to tap
-        let lY = tapping ? (phase ? upY : downY) : downY
-        let rY = tapping ? (phase ? downY : upY) : downY
-        for (px, py2) in [(cxD - 34, lY), (cxD + 34, rY)] {
-            let r = CGRect(x: px - pawRX, y: py2 - pawRY, width: pawRX * 2, height: pawRY * 2)
-            ctx.setFillColor(pink); ctx.fillEllipse(in: r)
-            ctx.setStrokeColor(dark); ctx.setLineWidth(2); ctx.strokeEllipse(in: r)
-        }
-
-        // Zzz when dozing
-        if !tapping {
-            Draw.text(ctx, "z", x: Int(cxD) + 60, y: Int(kbY) - 74,
-                      font: Fonts.system(16, weight: .bold), color: Color.textL)
-            Draw.text(ctx, "z", x: Int(cxD) + 72, y: Int(kbY) - 88,
-                      font: Fonts.system(12, weight: .bold), color: Color.textD)
-        }
-    }
-
     /// Draw a CGImage upright inside `rect` within the flipped (y-down) context.
     /// `flipX` mirrors it horizontally (for facing left/right).
     private func drawImageUpright(_ ctx: CGContext, _ image: CGImage, in rect: CGRect,
@@ -804,8 +502,7 @@ final class MonitorRenderer: FrameRenderer, @unchecked Sendable {
     // MARK: - Operator Panel (Skadi build-chibi, occupies the left / former CPU slot)
 
     /// Animated Skadi chibi in the left panel. She walks (Move) while any agent is
-    /// working, and idles (Relax) otherwise. The old CPU panel (`renderCPU`) is kept
-    /// intact as a component so a future layout preset can swap it back in.
+    /// working, and idles (Relax) otherwise.
     private func renderOperator(_ ctx: CGContext, agents: AgentsSnapshot, audioPlaying: Bool) {
         let x = Layout.panelX(0)
         let pw = Layout.panelWidth

@@ -186,18 +186,24 @@ struct Theme {
     let cornerBrackets: Bool    // draw ⌐ ¬ L L accent ticks at panel corners
     let scanlines: Bool         // faint CRT scanline overlay on the backdrop
     let gridBackground: Bool    // faint grid on the backdrop
+    let headerBar: Bool         // accent rule across the top of each panel
     let accentGlow: Bool        // glow under each panel's header bar
     let decor: Decor            // themed motifs (see Decor)
 
     static let classic = Theme(kind: .classic, palette: .classic, sharpCorners: false,
                                cornerBrackets: false, scanlines: false,
-                               gridBackground: false, accentGlow: true, decor: .none)
+                               gridBackground: false, headerBar: true,
+                               accentGlow: true, decor: .none)
+    // No header bar: the accent already reads from the corner brackets and the title,
+    // so the rule was redundant weight across the top of all three panels.
     static let miku = Theme(kind: .miku, palette: .miku, sharpCorners: false,
                             cornerBrackets: true, scanlines: true,
-                            gridBackground: false, accentGlow: true, decor: .miku)
+                            gridBackground: false, headerBar: false,
+                            accentGlow: false, decor: .miku)
     static let rhodes = Theme(kind: .rhodes, palette: .rhodes, sharpCorners: true,
                               cornerBrackets: true, scanlines: true,
-                              gridBackground: true, accentGlow: true, decor: .none)
+                              gridBackground: true, headerBar: true,
+                              accentGlow: true, decor: .none)
 
     static func of(_ kind: ThemeKind) -> Theme {
         switch kind {

@@ -354,11 +354,13 @@ enum Draw {
         }
 
         // Accent bar at top (y is top in flipped coords)
-        let barRect = CGRect(x: x + 2, y: y, width: w - 4, height: 3)
-        let barPath = CGPath(roundedRect: barRect, cornerWidth: 2, cornerHeight: 2, transform: nil)
-        ctx.setFillColor(accent)
-        ctx.addPath(barPath)
-        ctx.fillPath()
+        if theme.headerBar {
+            let barRect = CGRect(x: x + 2, y: y, width: w - 4, height: 3)
+            let barPath = CGPath(roundedRect: barRect, cornerWidth: 2, cornerHeight: 2, transform: nil)
+            ctx.setFillColor(accent)
+            ctx.addPath(barPath)
+            ctx.fillPath()
+        }
 
         // Subtle glow below accent
         if theme.accentGlow {
